@@ -1,8 +1,12 @@
 // The launcher: takes the game files (a zip, a folder or the files), keeps
 // them in this browser, lets the player choose the options, then runs the
 // engine once per animation frame until the player quits.
-import init, { Game, data_files, tick_hz } from './pkg/dn2_web.js';
-import { readZip } from './zip.js';
+// index.html imports this module with the build's version in its address
+// (`main.js?v=…`); the same version on the other files keeps the browser from
+// mixing in a cached older build.
+const VERSION = new URL(import.meta.url).search;
+const { default: init, Game, data_files, tick_hz } = await import(`./pkg/dn2_web.js${VERSION}`);
+const { readZip } = await import(`./zip.js${VERSION}`);
 
 const ARCHIVE = 'NUKEM2.CMP';
 /** Sound kept queued ahead of the device, in seconds (a game frame is 57 ms). */
@@ -503,7 +507,7 @@ function run(game, options, audio) {
 }
 
 async function main() {
-  await init();
+  await init({ module_or_path: new URL(`pkg/dn2_web_bg.wasm${VERSION}`, import.meta.url) });
   const params = new URLSearchParams(location.search);
   const state = { options: loadOptions(params), files: null, pictures: null, fromServer: false };
   status('Looking for the game files…');
