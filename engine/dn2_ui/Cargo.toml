@@ -1,0 +1,12 @@
+[package]
+name = "dn2_ui"
+version = "0.1.0"
+description = "Duke Nukem II screens: text scripts, menus, intro and bonus screens"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+dn2_assets.workspace = true
+dn2_game.workspace = true
+dn2_render.workspace = true
+log.workspace = true

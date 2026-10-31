@@ -1,0 +1,5 @@
+/pkg/
+# A folder or a symlink to one.
+/data
+# An HD pack: its pictures and files.txt listing them.
+/hd

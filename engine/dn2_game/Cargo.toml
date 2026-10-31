@@ -1,0 +1,11 @@
+[package]
+name = "dn2_game"
+version = "0.1.0"
+description = "Duke Nukem II simulation: player, actors and rules, deterministic"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+dn2_assets.workspace = true
+bitflags.workspace = true
+log.workspace = true

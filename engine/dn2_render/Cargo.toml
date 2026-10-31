@@ -1,0 +1,10 @@
+[package]
+name = "dn2_render"
+version = "0.1.0"
+description = "Duke Nukem II renderer: draws the world into an RGB frame"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+dn2_assets.workspace = true
+dn2_game.workspace = true

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duke Nukem II</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ccc;
+    font: 16px/1.4 system-ui, sans-serif; overflow: hidden; }
+  canvas { position: absolute; image-rendering: pixelated; outline: none; }
+  .panel { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1em; padding: 16px;
+    text-align: center; }
+  .panel[hidden] { display: none; }
+  .drop { border: 2px dashed #555; border-radius: 8px; padding: 2em; max-width: 32em; }
+  .drop.over { border-color: #ccc; }
+  button, label.button { background: #333; color: #eee; border: 1px solid #666;
+    border-radius: 4px; padding: .4em 1em; font: inherit; cursor: pointer; }
+  input[type=file] { display: none; }
+  .error { color: #f88; }
+  .small { font-size: 13px; color: #888; }
+</style>
+</head>
+<body>
+<canvas id="screen" tabindex="0" hidden></canvas>
+<div id="status" class="panel">Loading…</div>
+<div id="pick" class="panel" hidden>
+  <div class="drop" id="drop">
+    <p>Duke Nukem II needs its game files: choose the game folder, or drop
+      <code>NUKEM2.CMP</code> and <code>NUKEM2.F1</code> to <code>F5</code> here.
+      They stay in this browser.</p>
+    <p>
+      <label class="button">Choose folder<input id="pick-dir" type="file" webkitdirectory></label>
+      <label class="button">Choose files<input id="pick-files" type="file" multiple></label>
+    </p>
+    <p id="pick-error" class="error"></p>
+  </div>
+  <p class="small">Options in the address: <code>?wide</code>, <code>?filter=epx</code>,
+    <code>?scale=N</code>, <code>?mute</code>, <code>?play=L1</code>, <code>?viewer</code>,
+    <code>?pick</code> to choose the game files again, <code>?hd</code> for an HD pack,
+    <code>?pickhd</code> to choose it again.</p>
+</div>
+<div id="pick-hd" class="panel" hidden>
+  <div class="drop">
+    <p>Choose the folder of an HD pack: pictures named like <code>CZONE1.MNI/solid.png</code>,
+      <code>ACTORS.MNI/5/0.png</code>, <code>DROP1.MNI.png</code>. They stay in this browser.</p>
+    <p>
+      <label class="button">Choose HD folder<input id="pick-hd-dir" type="file" webkitdirectory></label>
+      <button id="pick-hd-skip">Play without</button>
+    </p>
+    <p id="pick-hd-error" class="error"></p>
+  </div>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

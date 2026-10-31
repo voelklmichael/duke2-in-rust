@@ -1,0 +1,20 @@
+[package]
+name = "dn2_web"
+version = "0.1.0"
+description = "Runs the Duke Nukem II engine in a web page (wasm)"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dn2_engine.workspace = true
+log = "0.4"
+# Must match the wasm-bindgen CLI that build.sh runs.
+wasm-bindgen = "=0.2.121"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console", "Window", "Storage", "ImageData"] }
+console_error_panic_hook = "0.1"
+base64 = "0.22"
+png = "0.18"

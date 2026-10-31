@@ -1,0 +1,3 @@
+/target/
+# The game files the tests read.
+/data

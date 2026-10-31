@@ -1,0 +1,11 @@
+[package]
+name = "dn2_assets"
+version = "0.1.0"
+description = "Duke Nukem II file formats: parses the original data into typed values"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+log.workspace = true
+thiserror.workspace = true
+bitflags.workspace = true
