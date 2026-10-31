@@ -431,6 +431,33 @@ function touchControls(game, signal) {
     toggle.classList.remove('held');
   };
 
+  // ⌨ shows a keyboard for typing (save game names, high scores); it stays
+  // open until ⌨ is pressed again.
+  const keyboard = $('keyboard');
+  const keyboardToggle = $('keyboard-toggle');
+  if (!keyboard.firstChild) {
+    const rows = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'].map((row) =>
+      [...row].map((c) => [/\d/.test(c) ? `Digit${c}` : `Key${c}`, c]));
+    rows[3].push(['Backspace', '⌫']);
+    rows.push([['Escape', 'Esc'], ['Space', 'Space'], ['Enter', 'Enter']]);
+    for (const row of rows) {
+      const line = document.createElement('div');
+      for (const [code, label] of row) {
+        const key = document.createElement('div');
+        key.dataset.key = code;
+        key.textContent = label;
+        line.append(key);
+      }
+      keyboard.append(line);
+    }
+  }
+  signal.addEventListener('abort', () => { keyboard.hidden = true; });
+  keyboardToggle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    keyboard.hidden = !keyboard.hidden;
+    keyboardToggle.classList.toggle('held', !keyboard.hidden);
+  }, { signal });
+
   for (const button of touch.querySelectorAll('[data-key]')) {
     const code = button.dataset.key;
     const fingers = new Set();
