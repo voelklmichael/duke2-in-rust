@@ -82,15 +82,12 @@ impl Rig {
             options: &mut self.options,
             bindings: &self.bindings,
             slot_names: &slots,
-            episode: 1,
-            level: 1,
             menus: &mut self.menus,
         };
         let mut ctx = Ctx {
             screen: &mut self.screen,
             data: &self.data,
             pressed,
-            held: false,
             ticks,
             events: &mut self.events,
         };

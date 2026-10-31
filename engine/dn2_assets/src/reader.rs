@@ -1,7 +1,5 @@
 //! Little-endian reading with errors that name the file.
 
-use alloc::string::ToString;
-
 use crate::AssetError;
 
 pub struct Reader<'a> {
@@ -20,10 +18,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn error(&self, reason: &'static str) -> AssetError {
-        AssetError::Malformed {
-            file: self.file.to_string(),
-            reason,
-        }
+        AssetError::malformed(self.file, reason)
     }
 
     pub fn seek(&mut self, pos: usize) -> Result<(), AssetError> {

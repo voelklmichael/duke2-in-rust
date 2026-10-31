@@ -114,13 +114,11 @@ impl GameData {
             levels.insert(name.clone(), Level::parse(name, &files.read(name)?)?);
         }
         // The other files are recognised by name or, for pictures, by size.
-        let (mut tilesets, mut backdrops, mut palettes, mut pictures, mut songs) = (
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-        );
+        let mut tilesets = BTreeMap::new();
+        let mut backdrops = BTreeMap::new();
+        let mut palettes = BTreeMap::new();
+        let mut pictures = BTreeMap::new();
+        let mut songs = BTreeMap::new();
         for entry in files.archive().entries() {
             let name = entry.name.as_str();
             let bytes = || files.read(name);

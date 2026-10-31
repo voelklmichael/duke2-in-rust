@@ -67,8 +67,8 @@ impl HdArt {
                 .inspect_err(|e| log::warn!("{name}: {e}"))
                 .ok()
         };
+        let rows = |tiles: usize| (tiles as u32).div_ceil(SHEET_COLUMNS) * 8;
         for (name, tileset) in &data.tilesets {
-            let rows = |tiles: usize| (tiles as u32).div_ceil(SHEET_COLUMNS) * 8;
             let width = SHEET_COLUMNS * 8;
             if let Some(image) = load(&format!("{name}/solid"), width, rows(tileset.solid.len())) {
                 art.solid.insert(name.clone(), image);
@@ -94,8 +94,7 @@ impl HdArt {
                 }
             }
         }
-        let status_rows = (data.status.tiles.len() as u32).div_ceil(SHEET_COLUMNS) * 8;
-        art.status = load(STATUS, SHEET_COLUMNS * 8, status_rows)
+        art.status = load(STATUS, SHEET_COLUMNS * 8, rows(data.status.tiles.len()))
             .map(|sheet| status_strip(&sheet, data.status.tiles.len()));
         art.font = load(FONT, FONT_GLYPH_WIDTH * data.font.glyphs.len() as u32, 16);
         for (name, picture) in &data.pictures {

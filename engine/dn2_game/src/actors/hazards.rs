@@ -9,8 +9,9 @@
 //! (`PlayerState::AirFan`, [`LevelState::fan`]). The parked ship takes him
 //! aboard (`PlayerState::Ship`).
 
-use super::hits::{self, ROBOT_DEATH};
-use super::{Actor, ActorFlags, Ctx, Kind, Update};
+use super::contact::{SPARKLE_500, sparkle};
+use super::hits::{self, robot_death};
+use super::{Actor, ActorFlags, Ctx, FIRE, Kind, Update};
 use crate::draw::Placed;
 use crate::effects::{BLAST, EXPLOSION, EXPLOSION_START, Motion};
 use crate::map::{Dir, Hit};
@@ -41,11 +42,9 @@ const LASER_SHOT_RIGHT: u16 = 0x87;
 /// Effects.
 const FLAME_RIGHT: u16 = 0x28;
 const FLAME_LEFT: u16 = 0x29;
-const FIREBALL: u16 = 0x2b;
 const FLAME: u16 = 0x4a;
 const DUST: u16 = 0x54;
 const DEBRIS_ROCK: u16 = 0x60;
-const SPARKLE_500: u16 = 0x7c;
 const TURRET_DEBRIS: u16 = 0x83;
 const SPIDER_DEBRIS: u16 = 0xe8;
 const COLUMN_DEBRIS_TOP: u16 = 0x98;
@@ -391,27 +390,6 @@ fn slot(c: &Ctx) -> Option<usize> {
     c.actors.current
 }
 
-/// The player's position in tiles.
-fn player_at(c: &Ctx) -> (i32, i32) {
-    (c.player.x, c.player.y)
-}
-
-/// Whether the middle of the actor and the player are at most `dist` columns
-/// apart.
-fn player_near_x(c: &Ctx, a: &Actor, dist: i32) -> bool {
-    let width = c
-        .sprites
-        .frame_box(a.id, a.frame)
-        .map_or(0, |f| i32::from(f.width));
-    let player = player_at(c).0
-        + if c.player.facing == Facing::Left {
-            2
-        } else {
-            1
-        };
-    (a.x + width / 2 - player).abs() <= dist
-}
-
 /// Lets the player go from a snake or a ceiling sucker.
 fn release_player(c: &mut Ctx) {
     // The frame stays (hidden, if he was inside) until he next stands.
@@ -421,13 +399,27 @@ fn release_player(c: &mut Ctx) {
     c.state.grabber = None;
 }
 
-/// The actor's update function.
-pub(super) fn update(a: &mut Actor, c: &mut Ctx) {
+/// Runs `f` on the actor's state, which is taken out (as a copy) so that it
+/// can use the whole actor, and put back after. `default` if the actor is not
+/// a hazard.
+fn with_state<R>(
+    a: &mut Actor,
+    c: &mut Ctx,
+    default: R,
+    f: impl FnOnce(&mut Actor, &mut Ctx, &mut State) -> R,
+) -> R {
     let Kind::Hazard(s) = &a.kind else {
-        return;
+        return default;
     };
     let mut s = *s;
-    match &mut s {
+    let result = f(a, c, &mut s);
+    a.kind = Kind::Hazard(s);
+    result
+}
+
+/// The actor's update function.
+pub(super) fn update(a: &mut Actor, c: &mut Ctx) {
+    with_state(a, c, (), |a, c, s| match s {
         State::FlameThrowerBot(s) => flame_thrower_bot(a, c, s),
         State::ParkedShip(s) => s.cooldown = s.cooldown.saturating_sub(1),
         State::BrokenMissile(s) => broken_missile(a, c, s),
@@ -442,8 +434,7 @@ pub(super) fn update(a: &mut Actor, c: &mut Ctx) {
         State::Snake(s) => snake(a, c, s),
         State::CeilingSucker(s) => ceiling_sucker(a, c, s),
         State::CrusherPiston(s) => crusher_piston(a, c, s),
-    }
-    a.kind = Kind::Hazard(s);
+    });
 }
 
 fn flame_thrower_bot(a: &mut Actor, c: &mut Ctx, s: &mut FlameThrowerBot) {
@@ -495,7 +486,7 @@ fn broken_missile(a: &mut Actor, c: &mut Ctx, s: &mut BrokenMissile) {
         c.remove(a);
         c.state.flash = Some(1);
         c.explosion_sound();
-        c.effect(FIREBALL, a.x, a.y, Motion::Still, 0);
+        c.effect(FIRE, a.x, a.y, Motion::Still, 0);
         for n in 0..4u16 {
             let path = if n & 1 == 0 { 1 } else { 3 };
             let x = a.x + i32::from(n) * 2;
@@ -508,7 +499,7 @@ fn eyeball_thrower(a: &mut Actor, c: &mut Ctx, s: &mut EyeballThrower) {
     const START: [u16; 11] = [0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5];
     const WALK: [u16; 2] = [5, 6];
     const THROW: [u16; 6] = [7, 7, 8, 8, 9, 9];
-    let px = player_at(c).0;
+    let px = c.player_at().0;
     match s.stage {
         Eyes::Face => {
             a.id = if px < a.x {
@@ -529,7 +520,7 @@ fn eyeball_thrower(a: &mut Actor, c: &mut Ctx, s: &mut EyeballThrower) {
         Eyes::Walk => {
             s.steps = s.steps.wrapping_add(1);
             let ahead = (a.id == EYEBALL_LEFT && px < a.x) || (a.id == EYEBALL_RIGHT && a.x < px);
-            if ahead && player_near_x(c, a, 14) && !player_near_x(c, a, 9) {
+            if ahead && c.near_x(a, 14) && !c.near_x(a, 9) {
                 s.stage = Eyes::Throw;
                 s.throw = 0;
             } else if s.steps & 3 == 0 {
@@ -598,7 +589,7 @@ fn laser_turret(a: &mut Actor, c: &mut Ctx, s: &mut LaserTurret) {
     }
     // Frame 4 looks straight ahead to the right, frame 0 to the left.
     let (shot, x);
-    if player_at(c).0 < a.x {
+    if c.player_at().0 < a.x {
         if a.frame != 0 {
             a.frame -= 1;
             return;
@@ -640,14 +631,14 @@ fn force_field_generator(a: &mut Actor, c: &mut Ctx, s: &mut ForceFieldGenerator
             a.frame = 0;
         }
     }
-    c.draw(FIELD_OVERLAY, s.overlay, a.x, a.y, SpriteLook::Normal);
+    c.draw_at(FIELD_OVERLAY, s.overlay, a);
     if s.destroy != 0 {
         s.destroy += 1;
         if s.destroy & 1 != 0 {
             c.sound(Sound::Break);
             let up = a.y - i32::from(s.destroy);
             c.particles(0x0b, Spread::Both, a.x + 1, up + 0x0f);
-            c.effect(SPARKLE_500, a.x, up + 0x13, Motion::Float, 0);
+            sparkle(c, SPARKLE_500, a.x, up + 0x13);
             c.add_score(500);
         }
         if s.destroy == 0x0b {
@@ -740,7 +731,7 @@ fn hover_drone(a: &mut Actor, c: &mut Ctx, s: &mut HoverDrone) {
     }
     if s.phase < 0x28 {
         if c.random.next_byte() & 3 == 0 {
-            let (px, py) = player_at(c);
+            let (px, py) = c.player_at();
             let dx = (px - a.x + 1).signum();
             let dy = (py - a.y - 2).signum();
             a.x += dx;
@@ -838,7 +829,7 @@ fn crusher_piston(a: &mut Actor, c: &mut Ctx, s: &mut CrusherPiston) {
 
 fn spider(a: &mut Actor, c: &mut Ctx, s: &mut Spider) {
     let me = slot(c);
-    let (px, py) = player_at(c);
+    let (px, py) = c.player_at();
     let facing = c.player.facing;
     if c.player.state == PlayerState::Grabbed && c.state.spiders.contains(me) {
         // Gone with the player into the jaws of a snake.
@@ -986,7 +977,7 @@ fn crawl(a: &mut Actor, c: &mut Ctx, s: &mut Spider, px: i32, py: i32) {
 fn launchable_missile(a: &mut Actor, c: &mut Ctx, s: &mut LaunchableMissile) {
     if s.stage != 0 {
         let flame = u16::from(c.draw_page);
-        c.draw(MISSILE_FLAME, flame, a.x, a.y, SpriteLook::Normal);
+        c.draw_at(MISSILE_FLAME, flame, a);
         if s.stage == 1 {
             c.effect(FLAME, a.x - 2, a.y + 1, Motion::Still, 0);
             c.effect(FLAME, a.x + 1, a.y + 1, Motion::Still, 0);
@@ -1038,8 +1029,8 @@ fn air_fan(a: &mut Actor, c: &mut Ctx, s: &mut AirFan) {
     }
     let step = usize::from(s.step);
     a.frame = FAN_FRAME[step];
-    c.draw(AIR_STREAM, FAN_STREAM[step], a.x, a.y, SpriteLook::Normal);
-    let (px, py) = player_at(c);
+    c.draw_at(AIR_STREAM, FAN_STREAM[step], a);
+    let (px, py) = c.player_at();
     if s.step >= FAN_LIFT_FROM
         && a.y < py + FAN_REACH
         && py < a.y
@@ -1062,8 +1053,8 @@ fn air_fan(a: &mut Actor, c: &mut Ctx, s: &mut AirFan) {
         c.player.jump_step = 5;
         c.player.frame = 6;
     }
-    if a.frame == 2 && c.on_screen(a.placed()) {
-        c.sound(Sound::Whir);
+    if a.frame == 2 {
+        c.sound_if_visible(a, Sound::Whir);
     }
 }
 
@@ -1073,9 +1064,7 @@ fn snake(a: &mut Actor, c: &mut Ctx, s: &mut Snake) {
         // The player died in its jaws.
         c.remove(a);
         c.state.grabber = None;
-        for (dx, dy, delay) in ROBOT_DEATH {
-            c.effect(EXPLOSION_START, a.x + dx, a.y + dy, Motion::Still, delay);
-        }
+        robot_death(c, a.x, a.y);
         return;
     }
     if s.caught {
@@ -1144,7 +1133,7 @@ fn ceiling_sucker(a: &mut Actor, c: &mut Ctx, s: &mut CeilingSucker) {
         0, 0, 0, 0, 0, 0, 10, 9, 8, 7, 6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6, 7, 8, 9, 10, 5, 4, 3, 2, 1,
         0, 1,
     ];
-    let px = player_at(c).0;
+    let px = c.player_at().0;
     if s.timer == 0 && a.x <= px + 4 && px <= a.x + 4 {
         s.timer = 1;
     }
@@ -1176,13 +1165,7 @@ fn ceiling_sucker(a: &mut Actor, c: &mut Ctx, s: &mut CeilingSucker) {
 /// The reaction to a hit for `damage`; false leaves it to the reactions by type
 /// in [`super::hits`].
 pub(super) fn hit(a: &mut Actor, c: &mut Ctx, damage: u8) -> bool {
-    let Kind::Hazard(s) = &a.kind else {
-        return false;
-    };
-    let mut s = *s;
-    let handled = hit_by(a, c, &mut s, damage);
-    a.kind = Kind::Hazard(s);
-    handled
+    with_state(a, c, false, |a, c, s| hit_by(a, c, s, damage))
 }
 
 fn hit_by(a: &mut Actor, c: &mut Ctx, s: &mut State, damage: u8) -> bool {
@@ -1256,17 +1239,11 @@ fn hit_by(a: &mut Actor, c: &mut Ctx, s: &mut State, damage: u8) -> bool {
 
 /// The reaction to touching the player; false leaves it to [`super::contact`].
 pub(super) fn touch(a: &mut Actor, c: &mut Ctx) -> bool {
-    let Kind::Hazard(s) = &a.kind else {
-        return false;
-    };
-    let mut s = *s;
-    let handled = touch_by(a, c, &mut s);
-    a.kind = Kind::Hazard(s);
-    handled
+    with_state(a, c, false, touch_by)
 }
 
 fn touch_by(a: &mut Actor, c: &mut Ctx, s: &mut State) -> bool {
-    let (px, py) = player_at(c);
+    let (px, py) = c.player_at();
     match s {
         // The force field that needs the cloaking device.
         State::ForceFieldGenerator(g) => {

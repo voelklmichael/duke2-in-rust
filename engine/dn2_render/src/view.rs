@@ -66,12 +66,13 @@ impl<'a> HdGraphics<'a> {
 /// `index`.
 fn sheet_block(image: &RgbaImage, scale: u32, index: usize, px: u32, py: u32) -> HdBlock<'_> {
     let (col, row) = (index as u32 % SHEET_COLUMNS, index as u32 / SHEET_COLUMNS);
-    HdBlock {
-        image,
-        x: (col * 8 + px) * scale,
-        y: (row * 8 + py) * scale,
-        color: None,
-    }
+    HdBlock::at(image, (col * 8 + px) * scale, (row * 8 + py) * scale)
+}
+
+/// Whether the view's tile `x`, `y` (counted from its top left) is in the
+/// view: as many tiles wide as the screen gives it, and `VIEW_ROWS` high.
+fn in_view(screen: &Screen, x: i32, y: i32) -> bool {
+    (0..i32::from(view_columns(screen))).contains(&x) && (0..i32::from(VIEW_ROWS)).contains(&y)
 }
 
 /// What changes from frame to frame.
@@ -171,13 +172,6 @@ fn backdrop_offset(flags: LevelFlags, state: &ViewState) -> (u32, u32) {
     (x % BACKDROP_WIDTH, y % BACKDROP_HEIGHT)
 }
 
-/// Sets the pixel at screen position `x`, `y` to `f(old)`, if on the screen.
-/// The view takes the whole width of a widescreen: [`Screen::left`] does not
-/// apply.
-fn plot(screen: &mut Screen, x: i32, y: i32, f: impl FnOnce(u8) -> u8) {
-    screen.plot_at(x, y, f);
-}
-
 /// Draws an 8x8 `tile` at `x`, `y`, keeping the screen where it is
 /// transparent; with `hd` (a sheet, its scale and the tile's index in it)
 /// its higher-detail picture too.
@@ -196,7 +190,7 @@ fn draw_tile(
             (Some((image, scale, index)), _) => {
                 screen.plot_hd(sx, sy, pixel, sheet_block(image, scale, index, px, py));
             }
-            (None, Some(pixel)) => plot(screen, sx, sy, |_| pixel),
+            (None, Some(pixel)) => screen.plot_at(sx, sy, |_| pixel),
             (None, None) => {}
         }
     }
@@ -221,15 +215,10 @@ fn draw_backdrop_tile(
                 let (sx, sy) = (VIEW_X + (tx * 8 + px) as i32, VIEW_Y + (ty * 8 + py) as i32);
                 match hd {
                     Some((image, scale)) => {
-                        let block = HdBlock {
-                            image,
-                            x: x * scale,
-                            y: y * scale,
-                            color: None,
-                        };
+                        let block = HdBlock::at(image, x * scale, y * scale);
                         screen.plot_hd(sx, sy, Some(pixel), block);
                     }
-                    None => plot(screen, sx, sy, |_| pixel),
+                    None => screen.plot_at(sx, sy, |_| pixel),
                 }
             }
         }
@@ -302,12 +291,11 @@ fn draw_sprite(
     let left = sprite.x + i32::from(frame.x_offset);
     let top = sprite.y + i32::from(frame.y_offset) - rows + 1;
     let (camera_x, camera_y) = (i32::from(state.camera_x), i32::from(state.camera_y));
-    let view_columns = i32::from(view_columns(screen));
     for row in 0..rows {
         for column in 0..columns {
             let (mx, my) = (left + column, top + row);
             let (vx, vy) = (mx - camera_x, my - camera_y);
-            if !(0..view_columns).contains(&vx) || !(0..i32::from(VIEW_ROWS)).contains(&vy) {
+            if !in_view(screen, vx, vy) {
                 continue;
             }
             if sprite.mode != DrawMode::OverForeground && covered(graphics, mx, my) {
@@ -335,9 +323,11 @@ fn draw_sprite(
                         continue;
                     }
                     match sprite.mode {
-                        DrawMode::WhiteFlash => plot(screen, x, y, |_| WHITE),
-                        DrawMode::OnePlane => plot(screen, x, y, |old| old & !2 | (pixel & 1) << 1),
-                        _ => plot(screen, x, y, |_| pixel),
+                        DrawMode::WhiteFlash => screen.plot_at(x, y, |_| WHITE),
+                        DrawMode::OnePlane => {
+                            screen.plot_at(x, y, |old| old & !2 | (pixel & 1) << 1)
+                        }
+                        _ => screen.plot_at(x, y, |_| pixel),
                     }
                 }
             }
@@ -351,7 +341,7 @@ fn draw_pixel(screen: &mut Screen, state: &ViewState, x: i32, y: i32, color: u8)
     let vy = y - i32::from(state.camera_y) * 8;
     let columns = i32::from(view_columns(screen));
     if (0..columns * 8).contains(&vx) && (0..PIXEL_ROWS * 8).contains(&vy) {
-        plot(screen, VIEW_X + vx, VIEW_Y + vy, |_| color);
+        screen.plot_at(VIEW_X + vx, VIEW_Y + vy, |_| color);
     }
 }
 
@@ -366,8 +356,7 @@ fn draw_cell(
     y: i32,
 ) {
     let (vx, vy) = (x - i32::from(state.camera_x), y - i32::from(state.camera_y));
-    let columns = i32::from(view_columns(screen));
-    if !(0..columns).contains(&vx) || !(0..i32::from(VIEW_ROWS)).contains(&vy) {
+    if !in_view(screen, vx, vy) {
         return;
     }
     let index = usize::from(cell / 8);
@@ -393,22 +382,19 @@ fn water_mask(wave: u8, row: i32) -> u8 {
 /// A block of water: the top row of cells in the shape of the wave, the
 /// bottom row full. Cells outside the view are left out.
 fn draw_water_block(screen: &mut Screen, state: &ViewState, wave: u8, x: i32, y: i32) {
-    let columns = i32::from(view_columns(screen));
     for (dy, dx) in [(0, 0), (0, 1), (1, 1), (1, 0)] {
         let (cx, cy) = (
             x + dx - i32::from(state.camera_x),
             y + dy - i32::from(state.camera_y),
         );
-        if !(0..columns).contains(&cx) || !(0..i32::from(VIEW_ROWS)).contains(&cy) {
+        if !in_view(screen, cx, cy) {
             continue;
         }
         for row in 0..8 {
             let mask = if dy == 0 { water_mask(wave, row) } else { 0xff };
             for p in 0..8 {
                 if mask & (0x80 >> p) != 0 {
-                    plot(screen, VIEW_X + cx * 8 + p, VIEW_Y + cy * 8 + row, |c| {
-                        (c & !4) | 8
-                    });
+                    screen.plot_at(VIEW_X + cx * 8 + p, VIEW_Y + cy * 8 + row, |c| (c & !4) | 8);
                 }
             }
         }
@@ -420,7 +406,7 @@ pub fn fill_view(screen: &mut Screen, color: u8) {
     let columns = i32::from(view_columns(screen));
     for y in 0..i32::from(VIEW_ROWS) * 8 {
         for x in 0..columns * 8 {
-            plot(screen, VIEW_X + x, VIEW_Y + y, |_| color);
+            screen.plot_at(VIEW_X + x, VIEW_Y + y, |_| color);
         }
     }
 }

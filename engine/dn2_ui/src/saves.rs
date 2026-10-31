@@ -9,6 +9,14 @@ use dn2_game::player::Weapon;
 
 use crate::Store;
 
+/// The weapons in the order of their codes in the saved games.
+const WEAPONS: [Weapon; 4] = [
+    Weapon::Regular,
+    Weapon::Laser,
+    Weapon::Rocket,
+    Weapon::FlameThrower,
+];
+
 /// The longest high score name.
 pub const NAME_LEN: usize = 15;
 /// The longest save slot name.
@@ -18,6 +26,31 @@ pub const SCORE_ENTRIES: usize = 10;
 /// Save slots.
 pub const SLOTS: usize = 8;
 
+/// Whether `slot` is a save slot (1 to 8).
+pub fn is_slot(slot: u8) -> bool {
+    (1..=SLOTS).contains(&usize::from(slot))
+}
+
+/// The start of a file in our format: the magic, then version 1.
+pub(crate) fn header(magic: &[u8; 4]) -> Vec<u8> {
+    let mut out = Vec::from(*magic);
+    out.push(1);
+    out
+}
+
+/// The parsed bytes under `key` in the store; the default value if there are
+/// none or they are bad.
+pub(crate) fn load_or_default<T: Default>(
+    store: &dyn Store,
+    key: &str,
+    parse: fn(&[u8]) -> Option<T>,
+) -> T {
+    store
+        .load_store(key)
+        .and_then(|b| parse(&b))
+        .unwrap_or_default()
+}
+
 /// Appends a length-prefixed string cut to `max` bytes (names are ASCII).
 fn put_str(out: &mut Vec<u8>, s: &str, max: usize) {
     let bytes = &s.as_bytes()[..s.len().min(max)];
@@ -26,11 +59,11 @@ fn put_str(out: &mut Vec<u8>, s: &str, max: usize) {
 }
 
 /// A reader over bytes that gives `None` instead of panicking.
-struct Reader<'a>(&'a [u8]);
+pub(crate) struct Reader<'a>(&'a [u8]);
 
 impl<'a> Reader<'a> {
     /// Checks the magic and the version byte.
-    fn new(bytes: &'a [u8], magic: &[u8; 4], version: u8) -> Option<Self> {
+    pub(crate) fn new(bytes: &'a [u8], magic: &[u8; 4], version: u8) -> Option<Self> {
         let rest = bytes.strip_prefix(magic)?.strip_prefix(&[version])?;
         Some(Reader(rest))
     }
@@ -41,8 +74,12 @@ impl<'a> Reader<'a> {
         Some(head)
     }
 
-    fn u8(&mut self) -> Option<u8> {
+    pub(crate) fn u8(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
+    }
+
+    pub(crate) fn u16(&mut self) -> Option<u16> {
+        Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
     }
 
     fn u32(&mut self) -> Option<u32> {
@@ -60,7 +97,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Nothing may be left over.
-    fn end(&self) -> Option<()> {
+    pub(crate) fn end(&self) -> Option<()> {
         self.0.is_empty().then_some(())
     }
 }
@@ -104,8 +141,7 @@ impl HighScores {
 
     /// Our file format: "DN2H", version 1, ten times name and score.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::from(*b"DN2H");
-        out.push(1);
+        let mut out = header(b"DN2H");
         for (name, score) in self.entries.iter().take(SCORE_ENTRIES) {
             put_str(&mut out, name, NAME_LEN);
             out.extend(score.to_le_bytes());
@@ -127,10 +163,7 @@ impl HighScores {
 
     /// The stored table of an episode; the default one if none or a bad one.
     pub fn load(store: &dyn Store, episode: u8) -> Self {
-        store
-            .load_store(&Self::key(episode))
-            .and_then(|b| Self::parse(&b))
-            .unwrap_or_default()
+        load_or_default(store, &Self::key(episode), Self::parse)
     }
 
     pub fn save(&self, store: &mut dyn Store, episode: u8) {
@@ -164,15 +197,15 @@ impl SavedGame {
     /// Our file format: "DN2S", version 1, episode, level, difficulty,
     /// weapon, ammo, score, shown.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::from(*b"DN2S");
-        out.push(1);
-        let weapon = match self.weapon {
-            Weapon::Regular => 0,
-            Weapon::Laser => 1,
-            Weapon::Rocket => 2,
-            Weapon::FlameThrower => 3,
-        };
-        out.extend([self.episode, self.level, self.difficulty, weapon, self.ammo]);
+        let mut out = header(b"DN2S");
+        let weapon = WEAPONS.iter().position(|&w| w == self.weapon).unwrap_or(0);
+        out.extend([
+            self.episode,
+            self.level,
+            self.difficulty,
+            weapon as u8,
+            self.ammo,
+        ]);
         out.extend(self.score.to_le_bytes());
         out.extend(self.shown.to_le_bytes());
         out
@@ -185,13 +218,7 @@ impl SavedGame {
         let episode = r.u8()?;
         let level = r.u8()?;
         let difficulty = r.u8()?;
-        let weapon = match r.u8()? {
-            0 => Weapon::Regular,
-            1 => Weapon::Laser,
-            2 => Weapon::Rocket,
-            3 => Weapon::FlameThrower,
-            _ => return None,
-        };
+        let weapon = *WEAPONS.get(usize::from(r.u8()?))?;
         let ammo = r.u8()?;
         let score = r.u32()?;
         let shown = r.u32()?;
@@ -236,8 +263,7 @@ impl SlotNames {
 
     /// Our file format: "DN2N", version 1, eight strings.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::from(*b"DN2N");
-        out.push(1);
+        let mut out = header(b"DN2N");
         for name in &self.0 {
             put_str(&mut out, name, SLOT_NAME_LEN);
         }
@@ -257,10 +283,7 @@ impl SlotNames {
 
     /// The stored names; empty ones if none or bad.
     pub fn load(store: &dyn Store) -> Self {
-        store
-            .load_store(Self::KEY)
-            .and_then(|b| Self::parse(&b))
-            .unwrap_or_default()
+        load_or_default(store, Self::KEY, Self::parse)
     }
 
     pub fn save(&self, store: &mut dyn Store) {
@@ -327,12 +350,7 @@ mod tests {
 
     #[test]
     fn saved_games() {
-        for weapon in [
-            Weapon::Regular,
-            Weapon::Laser,
-            Weapon::Rocket,
-            Weapon::FlameThrower,
-        ] {
+        for weapon in WEAPONS {
             let game = SavedGame {
                 episode: 3,
                 level: 8,

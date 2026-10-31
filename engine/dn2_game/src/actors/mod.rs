@@ -12,6 +12,24 @@
 //! [`hits`] and [`contact`] hold the reactions to shots and to the player,
 //! which the original keeps in one place for all types.
 
+/// The state of an actor's kind as a mutable reference, or a return from the
+/// function if the actor is of another kind: `state!(a, Machine(State::Water))`
+/// for a family's state, `state!(a, Animate)` for a kind of its own.
+macro_rules! state {
+    ($a:expr, $kind:ident($($state:tt)+)) => {
+        match &mut $a.kind {
+            $crate::actors::Kind::$kind($($state)+(s)) => s,
+            _ => return,
+        }
+    };
+    ($a:expr, $kind:ident) => {
+        match &mut $a.kind {
+            $crate::actors::Kind::$kind(s) => s,
+            _ => return,
+        }
+    };
+}
+
 mod basic;
 mod bosses;
 pub mod contact;
@@ -33,7 +51,7 @@ use crate::draw::{self, Draw, Placed, Sprite, SpriteLook};
 use crate::effects::{Effects, Motion};
 use crate::map::{Dir, Hit, Map};
 use crate::particles::{Particles, Spread};
-use crate::player::Player;
+use crate::player::{Facing, Player};
 use crate::shots::Shot;
 use crate::state::LevelState;
 use crate::{Buttons, GameEvent, Random, Sound};
@@ -92,8 +110,8 @@ impl Kind {
             Update::ItemBox => Self::ItemBox(ItemBox::new(vars)),
             update => None
                 .or_else(|| creatures::new(update, vars).map(Self::Creature))
-                .or_else(|| shooters::new(update, vars).map(Self::Shooter))
-                .or_else(|| bosses::new(update, vars).map(Self::Boss))
+                .or_else(|| shooters::new(update).map(Self::Shooter))
+                .or_else(|| bosses::new(update).map(Self::Boss))
                 .or_else(|| hazards::new(update, vars).map(Self::Hazard))
                 .or_else(|| machines::new(update, vars).map(Self::Machine))
                 .unwrap_or(Self::Unported { update, vars }),
@@ -247,13 +265,46 @@ impl Ctx<'_> {
         self.collide(a.id, a.frame, a.x, a.y, dir) == Hit::Free
     }
 
+    /// Draws a sprite where the actor is.
+    pub fn draw_at(&mut self, id: u16, frame: u16, a: &Actor) {
+        self.draw(id, frame, a.x, a.y, SpriteLook::Normal);
+    }
+
     pub fn on_screen(&self, p: Placed) -> bool {
         draw::on_screen(self.sprites, self.camera, p)
+    }
+
+    /// A sound, if the actor is in view.
+    pub fn sound_if_visible(&mut self, a: &Actor, sound: Sound) {
+        if self.on_screen(a.placed()) {
+            self.sound(sound);
+        }
     }
 
     /// The player's sprite where it is.
     pub fn player_placed(&self) -> Placed {
         self.player.placed()
+    }
+
+    /// The player's position in tiles.
+    pub fn player_at(&self) -> (i32, i32) {
+        (self.player.x, self.player.y)
+    }
+
+    /// Whether the middle of the actor's sprite is at most `dist` columns from
+    /// the player (who counts as one column further on the side he faces).
+    pub fn near_x(&self, a: &Actor, dist: i32) -> bool {
+        let width = self
+            .sprites
+            .frame_box(a.id, a.frame)
+            .map_or(0, |f| i32::from(f.width));
+        let at = self.player.x
+            + if self.player.facing == Facing::Left {
+                2
+            } else {
+                1
+            };
+        (a.x + (width >> 1) - at).abs() <= dist
     }
 
     /// Whether `p` overlaps the player.
@@ -264,6 +315,14 @@ impl Ctx<'_> {
     pub fn hurt_player(&mut self) {
         let difficulty = self.state.difficulty;
         self.player.damage(difficulty, self.events);
+    }
+
+    /// Kills the player, whatever his health, cloak or hurt timer.
+    pub fn kill_player(&mut self) {
+        self.player.health = 1;
+        self.player.hurt_timer = 0;
+        self.player.cloak_timer = 0;
+        self.hurt_player();
     }
 
     /// Call after moving the actor one tile along `dir`. If the move was
@@ -346,6 +405,8 @@ pub fn update_overlays(c: &mut Ctx) {
 
 /// The water blocks.
 const OVERLAY: u16 = 0xdd;
+/// The flame effect: a burning floor, a fireball, a bomb's fire.
+pub(super) const FIRE: u16 = 0x2b;
 
 fn is_overlay(a: &Actor) -> bool {
     a.id == OVERLAY

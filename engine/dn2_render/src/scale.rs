@@ -59,15 +59,17 @@ fn nearest(image: &Image, scale: u32) -> Image {
     }
 }
 
+/// The palette index at `x`, `y`, with the edges repeated: a clamped read,
+/// so a neighbour past the edge is the edge pixel.
+pub(crate) fn pixel_at(image: &Image, x: i32, y: i32) -> u8 {
+    let (w, h) = (image.width as i32, image.height as i32);
+    image.pixels[(y.clamp(0, h - 1) * w + x.clamp(0, w - 1)) as usize]
+}
+
 /// The 3x3 neighbourhood of a pixel, edges repeated: `[a b c d e f g h i]`
 /// with `e` the pixel.
 fn neighbours(image: &Image, x: u32, y: u32) -> [u8; 9] {
-    let (w, h) = (image.width as i32, image.height as i32);
-    let at = |dx: i32, dy: i32| {
-        let px = (x as i32 + dx).clamp(0, w - 1);
-        let py = (y as i32 + dy).clamp(0, h - 1);
-        image.pixels[(py * w + px) as usize]
-    };
+    let at = |dx: i32, dy: i32| pixel_at(image, x as i32 + dx, y as i32 + dy);
     [
         at(-1, -1),
         at(0, -1),
@@ -81,85 +83,72 @@ fn neighbours(image: &Image, x: u32, y: u32) -> [u8; 9] {
     ]
 }
 
-/// Writes `block` (n x n, row by row) for the pixel at `x`, `y`.
-fn put(out: &mut Image, x: u32, y: u32, n: u32, block: &[u8]) {
+/// Writes `block` (n x n, row by row) for the pixel at `x`, `y` of `out`,
+/// which is `width` pixels wide.
+pub(crate) fn put_block<T: Copy>(out: &mut [T], width: u32, x: u32, y: u32, n: u32, block: &[T]) {
     for (row, line) in block.chunks_exact(n as usize).enumerate() {
-        let start = ((y * n + row as u32) * out.width + x * n) as usize;
-        out.pixels[start..start + n as usize].copy_from_slice(line);
+        let start = ((y * n + row as u32) * width + x * n) as usize;
+        out[start..start + n as usize].copy_from_slice(line);
     }
+}
+
+/// `a` if `cond`, else `e`: one of an EPX rule's choices.
+fn pick(cond: bool, a: u8, e: u8) -> u8 {
+    if cond { a } else { e }
+}
+
+/// EPX at `scale`: each pixel's block of `N` (`scale` squared) comes from
+/// its 3x3 neighbourhood by `rule`.
+fn epx<const N: usize>(image: &Image, scale: u32, rule: impl Fn([u8; 9]) -> [u8; N]) -> Image {
+    let mut out = Image {
+        width: image.width * scale,
+        height: image.height * scale,
+        pixels: vec![0; image.pixels.len() * N],
+    };
+    for y in 0..image.height {
+        for x in 0..image.width {
+            let block = rule(neighbours(image, x, y));
+            put_block(&mut out.pixels, out.width, x, y, scale, &block);
+        }
+    }
+    out
 }
 
 /// EPX / Scale2x.
 fn epx2(image: &Image) -> Image {
-    let mut out = Image {
-        width: image.width * 2,
-        height: image.height * 2,
-        pixels: vec![0; image.pixels.len() * 4],
-    };
-    for y in 0..image.height {
-        for x in 0..image.width {
-            let [_, b, _, d, e, f, _, h, _] = neighbours(image, x, y);
-            let block = if b != h && d != f {
-                [
-                    if d == b { d } else { e },
-                    if b == f { f } else { e },
-                    if d == h { d } else { e },
-                    if h == f { f } else { e },
-                ]
-            } else {
-                [e; 4]
-            };
-            put(&mut out, x, y, 2, &block);
+    epx(image, 2, |[_, b, _, d, e, f, _, h, _]| {
+        if b != h && d != f {
+            [
+                pick(d == b, d, e),
+                pick(b == f, f, e),
+                pick(d == h, d, e),
+                pick(h == f, f, e),
+            ]
+        } else {
+            [e; 4]
         }
-    }
-    out
+    })
 }
 
 /// Scale3x, the 3x form of EPX.
 fn epx3(image: &Image) -> Image {
-    let mut out = Image {
-        width: image.width * 3,
-        height: image.height * 3,
-        pixels: vec![0; image.pixels.len() * 9],
-    };
-    for y in 0..image.height {
-        for x in 0..image.width {
-            let [a, b, c, d, e, f, g, h, i] = neighbours(image, x, y);
-            let block = if b != h && d != f {
-                [
-                    if d == b { d } else { e },
-                    if (d == b && e != c) || (b == f && e != a) {
-                        b
-                    } else {
-                        e
-                    },
-                    if b == f { f } else { e },
-                    if (d == b && e != g) || (d == h && e != a) {
-                        d
-                    } else {
-                        e
-                    },
-                    e,
-                    if (b == f && e != i) || (h == f && e != c) {
-                        f
-                    } else {
-                        e
-                    },
-                    if d == h { d } else { e },
-                    if (d == h && e != i) || (h == f && e != g) {
-                        h
-                    } else {
-                        e
-                    },
-                    if h == f { f } else { e },
-                ]
-            } else {
-                [e; 9]
-            };
-            put(&mut out, x, y, 3, &block);
+    epx(image, 3, |[a, b, c, d, e, f, g, h, i]| {
+        if b != h && d != f {
+            [
+                pick(d == b, d, e),
+                pick((d == b && e != c) || (b == f && e != a), b, e),
+                pick(b == f, f, e),
+                pick((d == b && e != g) || (d == h && e != a), d, e),
+                e,
+                pick((b == f && e != i) || (h == f && e != c), f, e),
+                pick(d == h, d, e),
+                pick((d == h && e != i) || (h == f && e != g), h, e),
+                pick(h == f, f, e),
+            ]
+        } else {
+            [e; 9]
         }
-    }
-    out
+    })
 }
 
 #[cfg(test)]

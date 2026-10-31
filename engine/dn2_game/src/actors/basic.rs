@@ -1,16 +1,14 @@
 //! The player's slot, decorations that animate, bonus globes and security
 //! cameras.
 
-use super::{Actor, Ctx, Kind};
+use super::items::{CLOAK_ITEM, RAPID_FIRE_ITEM};
+use super::{Actor, Ctx};
 use crate::messages::text;
 use crate::player::{Facing, PlayerState, SpiderPlaces, frame};
 use crate::state::LevelExit;
 use crate::{Buttons, Sound, SpriteLook};
 
-/// Items of the cloak and rapid fire in the inventory, and the level type
-/// the cloak comes back as.
-const CLOAK_ITEM: u16 = 0xd3;
-const RAPID_FIRE_ITEM: u16 = 0x34;
+/// The level type the cloak comes back as.
 const CLOAK_TYPE: u16 = 0x72;
 /// Frames left when the power-ups warn that they are ending.
 const WARNING_FRAMES: u16 = 30;
@@ -164,9 +162,7 @@ impl Animate {
 }
 
 pub(super) fn animate(a: &mut Actor, c: &mut Ctx) {
-    let Kind::Animate(s) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Animate);
     match a.id {
         // Flickers at random.
         0x105 => a.frame = u16::from(c.random.next_byte() & 4 == 0),
@@ -205,9 +201,7 @@ impl BonusGlobe {
 }
 
 pub(super) fn bonus_globe(a: &mut Actor, c: &mut Ctx) {
-    let Kind::BonusGlobe(s) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, BonusGlobe);
     s.spin = (s.spin + 1) % 4;
     let (globe, spin) = (s.globe, s.spin);
     c.draw(globe, spin, a.x, a.y, SpriteLook::Normal);

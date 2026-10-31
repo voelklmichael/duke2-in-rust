@@ -1,6 +1,31 @@
 //! Keys by name. The engine maps them to the game's buttons with the
 //! bindings of the configuration; a gamepad sets buttons directly.
 
+/// The keys without a parameter, in the order of their [`Key::code`]s 1 to 21.
+const NAMED: [Key; 21] = [
+    Key::Up,
+    Key::Down,
+    Key::Left,
+    Key::Right,
+    Key::Enter,
+    Key::Escape,
+    Key::Space,
+    Key::Backspace,
+    Key::Tab,
+    Key::LeftCtrl,
+    Key::RightCtrl,
+    Key::LeftAlt,
+    Key::RightAlt,
+    Key::LeftShift,
+    Key::RightShift,
+    Key::Insert,
+    Key::Delete,
+    Key::Home,
+    Key::End,
+    Key::PageUp,
+    Key::PageDown,
+];
+
 /// The keys the game knows. Frontends translate their own key codes; keys
 /// not listed here are not passed on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -78,58 +103,18 @@ impl Key {
     /// 0x100 + n for F(n), 0x200 + c for a letter, 0x300 + d for a digit.
     pub fn code(self) -> u16 {
         match self {
-            Key::Up => 1,
-            Key::Down => 2,
-            Key::Left => 3,
-            Key::Right => 4,
-            Key::Enter => 5,
-            Key::Escape => 6,
-            Key::Space => 7,
-            Key::Backspace => 8,
-            Key::Tab => 9,
-            Key::LeftCtrl => 10,
-            Key::RightCtrl => 11,
-            Key::LeftAlt => 12,
-            Key::RightAlt => 13,
-            Key::LeftShift => 14,
-            Key::RightShift => 15,
-            Key::Insert => 16,
-            Key::Delete => 17,
-            Key::Home => 18,
-            Key::End => 19,
-            Key::PageUp => 20,
-            Key::PageDown => 21,
             Key::F(n) => 0x100 + u16::from(n),
             Key::Letter(c) => 0x200 + c as u16,
             Key::Digit(d) => 0x300 + u16::from(d),
+            named => NAMED
+                .iter()
+                .position(|&k| k == named)
+                .map_or(0, |i| i as u16 + 1),
         }
     }
 
     /// The key of a [`Key::code`]; `None` for a number no key has.
     pub fn from_code(code: u16) -> Option<Key> {
-        const NAMED: [Key; 21] = [
-            Key::Up,
-            Key::Down,
-            Key::Left,
-            Key::Right,
-            Key::Enter,
-            Key::Escape,
-            Key::Space,
-            Key::Backspace,
-            Key::Tab,
-            Key::LeftCtrl,
-            Key::RightCtrl,
-            Key::LeftAlt,
-            Key::RightAlt,
-            Key::LeftShift,
-            Key::RightShift,
-            Key::Insert,
-            Key::Delete,
-            Key::Home,
-            Key::End,
-            Key::PageUp,
-            Key::PageDown,
-        ];
         let low = (code & 0xff) as u8;
         match code >> 8 {
             0 => NAMED.get(usize::from(code).checked_sub(1)?).copied(),
@@ -147,29 +132,7 @@ mod tests {
 
     #[test]
     fn codes_round_trip() {
-        let mut keys = alloc::vec![
-            Key::Up,
-            Key::Down,
-            Key::Left,
-            Key::Right,
-            Key::Enter,
-            Key::Escape,
-            Key::Space,
-            Key::Backspace,
-            Key::Tab,
-            Key::LeftCtrl,
-            Key::RightCtrl,
-            Key::LeftAlt,
-            Key::RightAlt,
-            Key::LeftShift,
-            Key::RightShift,
-            Key::Insert,
-            Key::Delete,
-            Key::Home,
-            Key::End,
-            Key::PageUp,
-            Key::PageDown,
-        ];
+        let mut keys = NAMED.to_vec();
         keys.extend((1..=12).map(Key::F));
         keys.extend(('A'..='Z').map(Key::Letter));
         keys.extend((0..=9).map(Key::Digit));

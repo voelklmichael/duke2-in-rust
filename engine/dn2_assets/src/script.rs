@@ -145,19 +145,13 @@ fn number<T: FromStr>(file: &str, token: &[u8]) -> Result<T, AssetError> {
     core::str::from_utf8(token)
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| AssetError::Malformed {
-            file: file.to_string(),
-            reason: "bad number in a script command",
-        })
+        .ok_or_else(|| AssetError::malformed(file, "bad number in a script command"))
 }
 
 /// Parses `//command args`; `None` for `END`.
 fn parse_command(file: &str, line: &[u8]) -> Result<Option<Command>, AssetError> {
     let (name, args) = split_space(line);
-    let bad = |reason| AssetError::Malformed {
-        file: file.to_string(),
-        reason,
-    };
+    let bad = |reason| AssetError::malformed(file, reason);
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_string();
     // The numbers up front, then the text after the last space.
     let split = |n: usize| -> Result<(Vec<u32>, &[u8]), AssetError> {

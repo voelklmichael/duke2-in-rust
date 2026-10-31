@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use crate::AssetError;
-use crate::gfx::{Image, Palette, Rgb};
+use crate::gfx::{Image, Palette, Rgb, widen};
 use crate::reader::Reader;
 
 const HEADER_BYTES: usize = 128;
@@ -151,7 +151,7 @@ fn parse_frame(
 fn parse_palette(r: &mut Reader, six_bit: bool) -> Result<Vec<PalettePacket>, AssetError> {
     // 8-bit values go through the 6-bit VGA DAC like everything else.
     let dac = |v: u8| if six_bit { v } else { v >> 2 };
-    let wide = |v: u8| dac(v) << 2 | dac(v) >> 4;
+    let wide = |v: u8| widen(dac(v));
     let mut first = 0;
     (0..r.u16()?)
         .map(|_| {

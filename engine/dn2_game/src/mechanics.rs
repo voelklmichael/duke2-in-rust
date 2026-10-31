@@ -40,6 +40,16 @@ impl SectionKind {
     pub const FALL_WHEN_UNSUPPORTED: Self = Self(0x68);
     pub const FALL_AND_EXPLODE_2: Self = Self(0x69);
     pub const FALL_THEN_STOP_3: Self = Self(0x6a);
+
+    /// Falls, then lands on the floor with a jolt.
+    fn falls_then_stops(self) -> bool {
+        matches!(self, Self::FALL_THEN_STOP | Self::FALL_THEN_STOP_2)
+    }
+
+    /// Falls, then blows up.
+    fn falls_and_explodes(self) -> bool {
+        matches!(self, Self::FALL_AND_EXPLODE | Self::FALL_AND_EXPLODE_2)
+    }
 }
 
 /// A rectangle of the map the level moves around, in tiles, edges
@@ -94,12 +104,7 @@ fn update_section(c: &mut Ctx, s: &mut MapSection) {
         }
         return;
     }
-    let stops = matches!(
-        kind,
-        SectionKind::FALL_THEN_STOP
-            | SectionKind::FALL_THEN_STOP_2
-            | SectionKind::FALL_WHEN_UNSUPPORTED
-    );
+    let stops = kind.falls_then_stops() || kind == SectionKind::FALL_WHEN_UNSUPPORTED;
     if stops && supported(c, s) {
         return;
     }
@@ -109,17 +114,11 @@ fn update_section(c: &mut Ctx, s: &mut MapSection) {
     // Falls up to two rows a frame, until something is below.
     let mut fell_twice = false;
     while !supported(c, s) {
-        shift_down(c.map, s.bottom, s.right, s.top, s.left);
+        shift_down(c.map, *s);
         s.top += 1;
         s.bottom += 1;
-        let k = SectionKind(s.kind);
-        if matches!(
-            k,
-            SectionKind::FALL_THEN_STOP | SectionKind::FALL_THEN_STOP_2
-        ) && supported(c, s)
-        {
-            c.sound(Sound::SectionLand);
-            c.state.shake = LANDING_SHAKE;
+        if SectionKind(s.kind).falls_then_stops() && supported(c, s) {
+            land(c);
             return;
         }
         if fell_twice {
@@ -131,21 +130,20 @@ fn update_section(c: &mut Ctx, s: &mut MapSection) {
         s.kind = SectionKind::FALL_THEN_STOP.0;
     }
     let kind = SectionKind(s.kind);
-    if matches!(
-        kind,
-        SectionKind::FALL_THEN_STOP | SectionKind::FALL_THEN_STOP_2
-    ) {
-        c.sound(Sound::SectionLand);
-        c.state.shake = LANDING_SHAKE;
-    } else if matches!(
-        kind,
-        SectionKind::FALL_AND_EXPLODE | SectionKind::FALL_AND_EXPLODE_2
-    ) {
+    if kind.falls_then_stops() {
+        land(c);
+    } else if kind.falls_and_explodes() {
         s.kind = SectionKind::DONE.0;
         explode_map_section(c, s.bottom, s.right, s.top, s.left);
     } else {
         sink(c, s);
     }
+}
+
+/// A falling section lands: a sound, and the picture jolts.
+fn land(c: &mut Ctx) {
+    c.sound(Sound::SectionLand);
+    c.state.shake = LANDING_SHAKE;
 }
 
 /// Sinks into the floor, a row at a time, until nothing is left.
@@ -157,7 +155,13 @@ fn sink(c: &mut Ctx, s: &mut MapSection) {
         c.effect(DUST, s.left + dust, s.bottom + 1, Motion::Rise, 0);
         c.sound(Sound::Thud);
     }
-    shift_down(c.map, s.bottom - 1, s.right, s.top, s.left);
+    shift_down(
+        c.map,
+        MapSection {
+            bottom: s.bottom - 1,
+            ..*s
+        },
+    );
     let old_top = s.top;
     s.top += 1;
     if old_top == s.bottom {
@@ -178,17 +182,17 @@ fn supported(c: &Ctx, s: &MapSection) -> bool {
 }
 
 /// Moves the cells of a rectangle down one row, clearing the cells they leave.
-fn shift_down(map: &mut Map, bottom: i32, right: i32, top: i32, left: i32) {
+fn shift_down(map: &mut Map, s: MapSection) {
     let mut cells = Vec::new();
-    for y in top..=bottom {
-        for x in left..=right {
+    for y in s.top..=s.bottom {
+        for x in s.left..=s.right {
             cells.push(map.cell(x, y));
             map.set_cell(x, y, 0);
         }
     }
     let mut cells = cells.into_iter();
-    for y in top + 1..=bottom + 1 {
-        for x in left..=right {
+    for y in s.top + 1..=s.bottom + 1 {
+        for x in s.left..=s.right {
             if let Some(cell) = cells.next() {
                 map.set_cell(x, y, cell);
             }

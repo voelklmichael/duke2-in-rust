@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 use crate::AssetError;
 use crate::gfx::{self, Image, Palette, SOLID_TILE_BYTES, Tile};
+use crate::hd::SHEET_COLUMNS;
 use crate::reader::Reader;
 
 /// 1000 solid tiles, 40 to a row: the backdrops (DROP*.MNI, one 320x200
@@ -15,7 +16,7 @@ pub struct TileSheet {
 }
 
 impl TileSheet {
-    pub const COLUMNS: u32 = 40;
+    pub const COLUMNS: u32 = SHEET_COLUMNS;
     const TILES: usize = 1000;
 
     pub fn parse(file: &str, bytes: &[u8]) -> Result<Self, AssetError> {

@@ -15,6 +15,8 @@ use alloc::vec::Vec;
 
 use dn2_assets::gfx::Image;
 
+use crate::scale::{pixel_at, put_block};
+
 /// Samples a frame pixel's coverage is measured with, a side.
 const SAMPLES: u32 = 4;
 /// Coverage of a whole frame pixel: two for each sample, as one on the
@@ -114,16 +116,11 @@ pub fn xbr(image: &Image, colors: &[u32], scale: u32, out: &mut [u32]) {
     let masks = Masks::new(scale);
     let yuv: Vec<Yuv> = colors.iter().map(|&c| Yuv::new(c)).collect();
     let (w, h) = (image.width as i32, image.height as i32);
-    let out_width = (image.width * scale) as usize;
     let n = scale as usize;
     let mut block = vec![0u32; n * n];
     for y in 0..h {
         for x in 0..w {
-            let at = |dx: i32, dy: i32| {
-                let px = (x + dx).clamp(0, w - 1);
-                let py = (y + dy).clamp(0, h - 1);
-                image.pixels[(py * w + px) as usize]
-            };
+            let at = |dx: i32, dy: i32| pixel_at(image, x + dx, y + dy);
             let e = at(0, 0);
             block.fill(colors[usize::from(e)]);
             // Each corner, as the bottom right one of the picture mirrored.
@@ -147,11 +144,7 @@ pub fn xbr(image: &Image, colors: &[u32], scale: u32, out: &mut [u32]) {
                     }
                 }
             }
-            let start = y as usize * n * out_width + x as usize * n;
-            for (row, line) in block.chunks_exact(n).enumerate() {
-                let at = start + row * out_width;
-                out[at..at + n].copy_from_slice(line);
-            }
+            put_block(out, image.width * scale, x as u32, y as u32, scale, &block);
         }
     }
 }

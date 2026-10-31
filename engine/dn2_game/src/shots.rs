@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use dn2_assets::sprites::Sprites;
 
-use crate::draw::{self, Draw, Placed, Sprite, SpriteLook};
+use crate::draw::{self, Draw, Placed};
 use crate::effects::{BLAST, EXPLOSION, Effects, Motion};
 use crate::map::{Dir, Hit, Map};
 use crate::player::Weapon;
@@ -186,17 +186,12 @@ impl Shot {
         }
     }
 
-    fn pos(&self) -> (i32, i32) {
-        (self.x, self.y)
-    }
-
     fn placed(&self) -> Placed {
-        let (x, y) = self.pos();
         Placed {
             id: self.sprite,
             frame: self.frame,
-            x,
-            y,
+            x: self.x,
+            y: self.y,
         }
     }
 
@@ -212,14 +207,8 @@ impl Shot {
         if !self.hit && !draw::on_screen(sprites, camera, self.placed()) {
             return false;
         }
-        let (x, y) = self.pos();
-        out.draws.push(Draw::Sprite(Sprite {
-            id: self.sprite,
-            frame: self.frame,
-            x,
-            y,
-            look: SpriteLook::Normal,
-        }));
+        let (x, y) = (self.x, self.y);
+        out.draws.push(Draw::sprite(self.sprite, self.frame, x, y));
         if self.hit {
             return false;
         }
@@ -269,7 +258,7 @@ impl Shot {
     /// A rocket hits a wall: an explosion where it is, and a cloud of
     /// blasts over its box.
     fn explode(&mut self, map: &Map, sprites: &Sprites, out: &mut Out) {
-        let (x, y) = self.pos();
+        let (x, y) = (self.x, self.y);
         let (bx, by) = match self.direction {
             ShotDirection::Up | ShotDirection::Down => (x - 2, y + 1),
             _ => (x - 1, y + 2),

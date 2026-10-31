@@ -13,12 +13,12 @@ use dn2_render::Screen;
 
 use crate::app::Shared;
 use crate::demo::{Demo, DemoFrame, demo_levels};
-use crate::draw::{BOX_FILL, TEXT_CURSOR};
+use crate::draw::{BOX_FILL, TEXT_CURSOR, slot_row};
 use crate::game::{Carry, Level, Session};
 use crate::runner::{Runner, ScriptEnd};
-use crate::saves::{SLOT_NAME_LEN, SavedGame};
-use crate::scene::{self, FADE_IN_TICKS, FADE_OUT_TICKS, Scene};
-use crate::{Ctx, Key, Store, UiEvent};
+use crate::saves::{SLOT_NAME_LEN, SavedGame, is_slot};
+use crate::scene::{self, Scene};
+use crate::{Ctx, Key, Store};
 
 /// How a game ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,7 +170,7 @@ impl Play {
         if core::mem::take(&mut self.welcome) {
             level.world.state.messages.show(text::WELCOME);
         }
-        ctx.events.push(UiEvent::Music(Some(level.music(ctx.data))));
+        ctx.music(Some(&level.music(ctx.data)));
         self.level = Some(level);
         self.first_frame(ctx, held);
         true
@@ -250,10 +250,9 @@ impl Play {
             }
             Phase::FadeIn(elapsed) => {
                 let elapsed = elapsed + ctx.ticks;
-                let steps = u32::from(Screen::FADE_STEPS);
-                ctx.screen.fade = (elapsed * steps / FADE_IN_TICKS).min(steps) as u8;
+                let fading = scene::fade_in(ctx.screen, elapsed);
                 self.draw(ctx.data, ctx.screen);
-                if elapsed < FADE_IN_TICKS {
+                if fading {
                     self.phase = Phase::FadeIn(elapsed);
                 } else {
                     self.ticks = 0;
@@ -262,7 +261,7 @@ impl Play {
             Phase::Playing => return self.playing(ctx, shared, held),
             Phase::RestartOut(elapsed) => {
                 let elapsed = elapsed + ctx.ticks;
-                if fade_out(ctx, elapsed) {
+                if scene::fade_out(ctx.screen, elapsed) {
                     self.phase = Phase::RestartOut(elapsed);
                 } else {
                     return self.restart(ctx, held);
@@ -271,7 +270,7 @@ impl Play {
             // Fade out, the move, then a frame and fade in.
             Phase::TeleportOut(elapsed) => {
                 let elapsed = elapsed + ctx.ticks;
-                if fade_out(ctx, elapsed) {
+                if scene::fade_out(ctx.screen, elapsed) {
                     self.phase = Phase::TeleportOut(elapsed);
                 } else {
                     if let Some(level) = &mut self.level {
@@ -297,13 +296,10 @@ impl Play {
                     });
                 }
             }
-            Phase::Overlay(mut runner, overlay) => {
-                let (episode, level) = (self.session.episode, self.session.level);
-                match runner.step(ctx, &mut shared.env(episode, level)) {
-                    None => self.phase = Phase::Overlay(runner, overlay),
-                    Some(end) => return self.overlay_done(ctx, shared, store, overlay, end),
-                }
-            }
+            Phase::Overlay(mut runner, overlay) => match runner.step(ctx, &mut shared.env()) {
+                None => self.phase = Phase::Overlay(runner, overlay),
+                Some(end) => return self.overlay_done(ctx, shared, store, overlay, end),
+            },
             Phase::SaveName { slot, name, blink } => {
                 return self.save_name(ctx, shared, store, slot, name, blink);
             }
@@ -456,8 +452,7 @@ impl Play {
         })?;
         if section.starts_with("Music") {
             let song = self.level.as_ref().map(|l| l.music(ctx.data));
-            ctx.events
-                .push(UiEvent::Music(song.filter(|_| shared.config.options.music)));
+            ctx.music(song.as_deref().filter(|_| shared.config.options.music));
         }
         Some((script(ctx.data, file, section)?, overlay))
     }
@@ -500,7 +495,7 @@ impl Play {
                 }
                 Some(("OPTIONS.MNI", "My_Options", Overlay::Options))
             }
-            (Overlay::SaveSlot, ScriptEnd::Chosen(slot)) if (1..=8).contains(&slot) => {
+            (Overlay::SaveSlot, ScriptEnd::Chosen(slot)) if is_slot(slot) => {
                 self.start_save_name(ctx, shared, slot);
                 return None;
             }
@@ -508,7 +503,7 @@ impl Play {
                 self.save(shared, store, slot);
                 None
             }
-            (Overlay::RestoreSlot, ScriptEnd::Chosen(slot)) if (1..=8).contains(&slot) => {
+            (Overlay::RestoreSlot, ScriptEnd::Chosen(slot)) if is_slot(slot) => {
                 if SavedGame::load(store, slot).is_some() {
                     Some(("TEXT.MNI", "&Load", Overlay::Restoring(slot)))
                 } else {
@@ -540,7 +535,7 @@ impl Play {
     /// slot's "Empty" is wiped out first.
     fn start_save_name(&mut self, ctx: &mut Ctx, shared: &Shared, slot: u8) {
         let name = shared.slots.0[usize::from(slot - 1)].clone();
-        let row = i32::from(slot - 1) * 2 + 6;
+        let row = slot_row(i32::from(slot - 1));
         let gfx = ctx.gfx();
         if name.is_empty() {
             for r in [row - 1, row] {
@@ -568,7 +563,7 @@ impl Play {
         mut name: String,
         blink: u32,
     ) -> Option<PlayEnd> {
-        let row = i32::from(slot - 1) * 2 + 6;
+        let row = slot_row(i32::from(slot - 1));
         let gfx = ctx.gfx();
         let blink = blink + ctx.ticks;
         for &key in ctx.pressed {
@@ -667,11 +662,4 @@ pub(crate) fn text_cursor(ctx: &mut Ctx, row: i32, col: i32, ticks: u32) {
 /// Wipes the text cursor out.
 pub(crate) fn clear_cursor(ctx: &mut Ctx, row: i32, col: i32) {
     ctx.gfx().solid(ctx.screen, row, col, BOX_FILL);
-}
-
-/// Sets the fade for `elapsed` ticks of a fade out; false once it is over.
-fn fade_out(ctx: &mut Ctx, elapsed: u32) -> bool {
-    let left = FADE_OUT_TICKS.saturating_sub(elapsed);
-    ctx.screen.fade = (left * u32::from(Screen::FADE_STEPS) / FADE_OUT_TICKS) as u8;
-    elapsed < FADE_OUT_TICKS
 }

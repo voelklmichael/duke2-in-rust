@@ -15,13 +15,12 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use dn2_assets::GameData;
 use dn2_assets::script::{Command, Section};
 use dn2_game::Sound;
 use dn2_render::Screen;
 
 use crate::config::{Bindings, Options};
-use crate::draw::{BLANK_2X2, CHECK_OFF, CHECK_ON, CURSOR, Gfx};
+use crate::draw::{BLANK_2X2, CHECK_OFF, CHECK_ON, CURSOR};
 use crate::{Ctx, Key};
 
 /// What the script needs of the program around it.
@@ -30,9 +29,6 @@ pub struct ScriptEnv<'a> {
     pub bindings: &'a Bindings,
     /// The 8 saved game names ("" for an empty slot), for `//GETNAMES`.
     pub slot_names: &'a [String],
-    /// Episode and level, from 1, for `//HELPTEXT`.
-    pub episode: u8,
-    pub level: u8,
     /// The last selection of each menu number, from 1.
     pub menus: &'a mut [u8; 16],
 }
@@ -104,7 +100,6 @@ pub struct Runner {
     text_row: i32,
     /// Columns that boxes and centred text are moved left by (`//SHIFTWIN`).
     shift: i32,
-    hint: Option<Vec<u8>>,
     done: Option<ScriptEnd>,
     /// Ticks without a key, with `//EXITTODEMO`.
     idle: Option<u32>,
@@ -131,15 +126,6 @@ fn box_opening(width: i32, height: i32, row: i32) -> Vec<[i32; 4]> {
     }
     frames.reverse();
     frames
-}
-
-fn gfx(data: &GameData) -> Gfx<'_> {
-    Gfx {
-        status: &data.status,
-        sprites: &data.sprites,
-        font: &data.font,
-        hd: &data.hd,
-    }
 }
 
 /// The key of a scan code: the `//SETKEYS` bytes of the scripts are scan codes
@@ -190,16 +176,9 @@ impl Runner {
             box_frames: None,
             text_row: 0,
             shift: 0,
-            hint: None,
             done: None,
             idle: None,
         }
-    }
-
-    /// The hint text `//HELPTEXT` chose for the episode and level, upper
-    /// case.
-    pub fn hint(&self) -> Option<&[u8]> {
-        self.hint.as_deref()
     }
 
     fn finish(&mut self, env: &mut ScriptEnv, end: ScriptEnd) -> Option<ScriptEnd> {
@@ -306,7 +285,7 @@ impl Runner {
     /// of the section.
     fn run(&mut self, ctx: &mut Ctx, env: &mut ScriptEnv) -> Option<ScriptEnd> {
         let data = ctx.data;
-        let g = gfx(data);
+        let g = ctx.gfx();
         while let Some(command) = self.commands.get(self.pc).cloned() {
             self.pc += 1;
             match command {
@@ -344,7 +323,7 @@ impl Runner {
                 }
                 Command::Menu { number } => {
                     self.menu = Some(number);
-                    let pages = self.pages.len().max(1) as u8;
+                    let pages = self.page_count();
                     let last = env.menus.get(usize::from(number)).copied().unwrap_or(1);
                     self.selected = last.clamp(1, pages);
                     // Start at the remembered page, skipping the others.
@@ -424,17 +403,15 @@ impl Runner {
                     g.text(ctx.screen, &text, self.text_row, col);
                     self.text_row += 1;
                 }
-                Command::HelpText {
-                    episode,
-                    level,
-                    text,
-                } if episode == env.episode && level == env.level => {
-                    self.hint = Some(text.to_ascii_uppercase());
-                }
                 _ => {}
             }
         }
         Some(ScriptEnd::Done)
+    }
+
+    /// The number of pages of the menu (at least 1).
+    fn page_count(&self) -> u8 {
+        self.pages.len().max(1) as u8
     }
 
     /// A box that is lit when the option is on, 2 by 2 tiles left of the entry.
@@ -442,7 +419,7 @@ impl Runner {
         let Some((col, entries)) = &self.toggles else {
             return;
         };
-        let g = gfx(ctx.data);
+        let g = ctx.gfx();
         for &(row, letter) in entries {
             let offset = if env.options.get(letter) {
                 CHECK_ON
@@ -463,7 +440,7 @@ impl Runner {
             self.cursor_ticks = 0;
             self.cursor_phase = (self.cursor_phase + 0x10) % 0x80;
         }
-        gfx(ctx.data).solid_2x2(
+        ctx.gfx().solid_2x2(
             ctx.screen,
             self.cursor_row - 1,
             CURSOR_COL,
@@ -475,7 +452,8 @@ impl Runner {
     fn press(&mut self, ctx: &mut Ctx, env: &mut ScriptEnv, key: Key) -> Press {
         // Erase the cursor.
         if self.cursor_row != 0 {
-            gfx(ctx.data).solid_2x2(ctx.screen, self.cursor_row - 1, CURSOR_COL, BLANK_2X2);
+            ctx.gfx()
+                .solid_2x2(ctx.screen, self.cursor_row - 1, CURSOR_COL, BLANK_2X2);
         }
         if let Some(i) = self
             .hot_keys
@@ -488,7 +466,7 @@ impl Runner {
             // Any other key continues the script.
             return Press::Go;
         }
-        let pages = self.pages.len().max(1) as u8;
+        let pages = self.page_count();
         match key {
             Key::Escape => return Press::End(ScriptEnd::Cancel),
             Key::Enter | Key::Space => {

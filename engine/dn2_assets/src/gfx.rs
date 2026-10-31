@@ -36,13 +36,25 @@ impl Rgb {
 
     /// From a 6-bit VGA DAC value per channel.
     fn from_dac(r: u8, g: u8, b: u8) -> Self {
-        let wide = |v: u8| (v.min(63) << 2) | (v.min(63) >> 4);
         Self {
-            r: wide(r),
-            g: wide(g),
-            b: wide(b),
+            r: widen(r.min(63)),
+            g: widen(g.min(63)),
+            b: widen(b.min(63)),
         }
     }
+}
+
+/// A 6-bit VGA DAC value as 8 bits: 63 becomes 255.
+pub(crate) fn widen(v: u8) -> u8 {
+    (v << 2) | (v >> 4)
+}
+
+/// Colours of 3 bytes each, every channel through `shown`.
+fn colours(bytes: &[u8], shown: impl Fn(u8) -> u8) -> Vec<Rgb> {
+    bytes
+        .chunks(3)
+        .map(|c| Rgb::from_dac(shown(c[0]), shown(c[1]), shown(c[2])))
+        .collect()
 }
 
 /// 16 colours (EGA pictures and the game) or 256 (VGA pictures, movies).
@@ -55,24 +67,13 @@ impl Palette {
     /// shows value x 15 / 16 as the 6-bit DAC value, so 64 shows as 60.
     pub fn parse_ega(file: &str, bytes: &[u8]) -> Result<Self, AssetError> {
         let bytes = Reader::new(file, bytes).bytes(48)?;
-        let shown = |v: u8| (v as u16 * 15 / 16) as u8;
-        Ok(Self(
-            bytes
-                .chunks(3)
-                .map(|c| Rgb::from_dac(shown(c[0]), shown(c[1]), shown(c[2])))
-                .collect(),
-        ))
+        Ok(Self(colours(bytes, |v| (v as u16 * 15 / 16) as u8)))
     }
 
     /// A VGA palette: 256 x RGB, 6-bit values.
     pub fn parse_vga(file: &str, bytes: &[u8]) -> Result<Self, AssetError> {
         let bytes = Reader::new(file, bytes).bytes(768)?;
-        Ok(Self(
-            bytes
-                .chunks(3)
-                .map(|c| Rgb::from_dac(c[0], c[1], c[2]))
-                .collect(),
-        ))
+        Ok(Self(colours(bytes, |v| v)))
     }
 
     pub fn get(&self, index: u8) -> Rgb {

@@ -130,13 +130,6 @@ pub struct LevelState {
 }
 
 impl LevelState {
-    pub fn new(difficulty: u8) -> Self {
-        Self {
-            difficulty,
-            ..Self::default()
-        }
-    }
-
     /// Whether the earthquake shakes right now.
     pub fn earthquake_going(&self, flags: LevelFlags) -> bool {
         flags.contains(LevelFlags::EARTHQUAKE)

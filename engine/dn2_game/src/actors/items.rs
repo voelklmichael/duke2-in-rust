@@ -5,6 +5,7 @@
 //! then takes the box's place with its own sprite. Items placed in the open are
 //! the same actor, past the box stage.
 
+use super::contact::{FIREWORK, sparkle};
 use super::{Actor, ActorFlags, Ctx, Kind};
 use crate::SpriteLook;
 use crate::effects::Motion;
@@ -34,6 +35,11 @@ pub(super) const CLOAK: u16 = 0x72;
 pub(super) const SODA: u16 = 0xa8;
 pub(super) const BIG_HEALTH: u16 = 0xae;
 const SPECIAL: u16 = 0xb9;
+/// Inventory items: the cloak and rapid fire (their icons' sprites), and the
+/// crystal globe the hint pedestal wants.
+pub(super) const CLOAK_ITEM: u16 = 0xd3;
+pub(super) const RAPID_FIRE_ITEM: u16 = 0x34;
+pub(super) const HINT_GLOBE: u16 = 0xee;
 
 /// Where a box or item is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,9 +84,7 @@ impl ItemBox {
 }
 
 pub(super) fn item_box(a: &mut Actor, c: &mut Ctx) {
-    let Kind::ItemBox(s) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, ItemBox);
     if s.stage == Stage::Closed {
         return;
     }
@@ -98,9 +102,7 @@ pub(super) fn item_box(a: &mut Actor, c: &mut Ctx) {
             return;
         }
     }
-    let Kind::ItemBox(s) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, ItemBox);
     if s.stage == Stage::Opening {
         if a.id == GREY_BOX {
             for (id, path) in BREAK_GREY {
@@ -134,9 +136,7 @@ pub(super) fn item_box(a: &mut Actor, c: &mut Ctx) {
             }
         }
     }
-    let Kind::ItemBox(s) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, ItemBox);
     if let Stage::Hop(step) = s.stage {
         a.flags.insert(ActorFlags::ALWAYS_UPDATE);
         a.y += HOP[usize::from(step)];
@@ -239,5 +239,5 @@ fn big_health(a: &mut Actor, c: &mut Ctx) {
         c.effect(0xaa, x, y, Motion::Debris(u), 0);
     }
     c.add_score(10000);
-    c.effect(0x7f, a.x, a.y, Motion::Float, 0);
+    sparkle(c, FIREWORK, a.x, a.y);
 }

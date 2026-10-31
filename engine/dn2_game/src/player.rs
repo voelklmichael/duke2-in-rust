@@ -560,20 +560,14 @@ impl Player {
             return false;
         }
         self.leave_ship();
-        self.jump_latch = true;
-        Self::sound(c, Sound::Jump);
-        self.state = PlayerState::Jumping;
-        self.jump_step = 0;
+        self.start_jump(c, 0);
         true
     }
 
     /// One tile of the ship's flight the way it faces, or a slide up or down
     /// a tile when that is blocked.
     fn ship_step(&mut self, c: &Ctx) {
-        let (dx, dir) = match self.facing {
-            Facing::Left => (-1, Dir::Left),
-            Facing::Right => (1, Dir::Right),
-        };
+        let (dx, dir) = self.step_dir();
         let id = self.sprite_id();
         let hit = |x, y, id, dir| c.map.collide(c.sprites, id, 0, x, y, dir);
         if hit(self.x + dx, self.y, id, dir) == Hit::Free {
@@ -651,16 +645,10 @@ impl Player {
         self.input.contains(button)
     }
 
-    /// Whether sprite frame `frame` of the player at `x`, `y` is clear on
-    /// `dir`. The standing frame's box is a column narrower: the blank column
-    /// is left out on the side it is on. Also notes the belt, steps up a one
-    /// tile ledge and lines up with a ladder.
-    fn probe(&mut self, c: &Ctx, x: i32, y: i32, frame: u16, dir: Dir) -> Hit {
-        let id = self.sprite_id();
-        self.probe_as(c, id, x, y, frame, dir)
-    }
-
-    /// [`Self::probe`] with the box of sprite `id`.
+    /// Whether frame `frame` of sprite `id` at `x`, `y` is clear on `dir`. The
+    /// standing frame's box is a column narrower: the blank column is left out
+    /// on the side it is on. Also notes the belt, steps up a one tile ledge and
+    /// lines up with a ladder.
     fn probe_as(&mut self, c: &Ctx, id: u16, x: i32, y: i32, frame: u16, dir: Dir) -> Hit {
         self.conveyor = None;
         if id == SHIP_LEFT || id == SHIP_RIGHT {
@@ -699,10 +687,31 @@ impl Player {
         self.input.intersects(Buttons::LEFT | Buttons::RIGHT)
     }
 
-    /// `probe` for the player's own position moved by `dx`, `dy`.
+    /// The pose of the moment keeps the sideways step: a jump's second frame,
+    /// looking up or down on the ground, or hanging with down or fire held.
+    fn pose_blocks_sideways(&self) -> bool {
+        match self.state {
+            PlayerState::Jumping => self.jump_step == 1,
+            PlayerState::Standing => self.pressed(Buttons::UP) || self.pressed(Buttons::DOWN),
+            PlayerState::Hanging => self.pressed(Buttons::DOWN) || self.pressed(Buttons::FIRE),
+            _ => false,
+        }
+    }
+
+    /// One tile sideways the way the player faces, and the side it moves to.
+    fn step_dir(&self) -> (i32, Dir) {
+        match self.facing {
+            Facing::Left => (-1, Dir::Left),
+            Facing::Right => (1, Dir::Right),
+        }
+    }
+
+    /// Whether the player's sprite, `dx`, `dy` from where it is, is clear on
+    /// `dir` (see [`Self::probe_as`]).
     fn check(&mut self, c: &Ctx, dx: i32, dy: i32, frame: u16, dir: Dir) -> Hit {
+        let id = self.sprite_id();
         let (x, y) = (self.x + dx, self.y + dy);
-        self.probe(c, x, y, frame, dir)
+        self.probe_as(c, id, x, y, frame, dir)
     }
 
     fn move_by(&mut self, dx: i32, dy: i32) {
@@ -712,6 +721,15 @@ impl Player {
 
     fn sound(c: &mut Ctx, id: Sound) {
         c.events.push(GameEvent::Sound(id));
+    }
+
+    /// A jump starts at `step` (0 from the ground, 1 from a hold): the jump
+    /// button must be let go before the next one.
+    fn start_jump(&mut self, c: &mut Ctx, step: u8) {
+        self.jump_latch = true;
+        Self::sound(c, Sound::Jump);
+        self.state = PlayerState::Jumping;
+        self.jump_step = step;
     }
 
     /// The belt under the feet moves the player one tile a frame.
@@ -748,16 +766,10 @@ impl Player {
         if !self.moves_sideways() || self.state == PlayerState::Landing {
             return;
         }
-        let up_or_down = self.pressed(Buttons::UP) || self.pressed(Buttons::DOWN);
-        let blocked = match self.state {
-            PlayerState::Jumping => self.jump_step == 1,
-            PlayerState::Standing => up_or_down,
-            PlayerState::Hanging => self.pressed(Buttons::DOWN) || self.pressed(Buttons::FIRE),
-            _ => false,
-        };
-        if blocked || self.frame == frame::HANG_UP {
+        if self.pose_blocks_sideways() || self.frame == frame::HANG_UP {
             return;
         }
+        let (dx, dir) = self.step_dir();
         let free = if self.state == PlayerState::Hanging {
             // A hanging player's box sits a row higher on the right.
             match self.facing {
@@ -768,13 +780,10 @@ impl Player {
                 }
             }
         } else {
-            match self.facing {
-                Facing::Right => self.check(c, 1, 0, frame::STAND, Dir::Right),
-                Facing::Left => self.check(c, -1, 0, frame::STAND, Dir::Left),
-            }
+            self.check(c, dx, 0, frame::STAND, dir)
         } == Hit::Free;
         if free {
-            self.move_by(if self.facing == Facing::Right { 1 } else { -1 }, 0);
+            self.move_by(dx, 0);
             self.moved = true;
         }
     }
@@ -788,12 +797,7 @@ impl Player {
         let skipped = self.moves_sideways()
             && self.state != PlayerState::Landing
             && self.frame != frame::HANG_UP
-            && match self.state {
-                PlayerState::Jumping => self.jump_step == 1,
-                PlayerState::Standing => self.pressed(Buttons::UP) || self.pressed(Buttons::DOWN),
-                PlayerState::Hanging => self.pressed(Buttons::DOWN) || self.pressed(Buttons::FIRE),
-                _ => false,
-            };
+            && self.pose_blocks_sideways();
         if skipped {
             return false;
         }
@@ -814,10 +818,7 @@ impl Player {
                 self.move_by(0, -1);
             }
         } else {
-            // Let go of the flames: fall.
-            self.jump_latch = true;
-            self.fall_off();
-            self.frame = frame::AIR;
+            self.let_go();
         }
         true
     }
@@ -878,6 +879,13 @@ impl Player {
         self.fall_step = 0;
     }
 
+    /// Lets go of a hold (a pipe or the flames) and falls, the frame in the air.
+    fn let_go(&mut self) {
+        self.jump_latch = true;
+        self.fall_off();
+        self.frame = frame::AIR;
+    }
+
     /// On the ground: jump, or stand, walk and look, or step off an edge.
     fn stand(&mut self, c: &mut Ctx) -> bool {
         self.release_jump();
@@ -885,10 +893,7 @@ impl Player {
             && !self.jump_latch
             && self.check(c, 0, -1, frame::STAND, Dir::Up) != Hit::Solid
         {
-            self.jump_latch = true;
-            Self::sound(c, Sound::Jump);
-            self.state = PlayerState::Jumping;
-            self.jump_step = 0;
+            self.start_jump(c, 0);
             return false;
         }
         let below = self.check(c, 0, 1, frame::STAND, Dir::Down);
@@ -921,19 +926,13 @@ impl Player {
             && !self.pressed(Buttons::DOWN)
             && self.check(c, 0, -2, frame::STAND, Dir::Up) == Hit::Free;
         if pull_up {
-            self.jump_latch = true;
-            Self::sound(c, Sound::Jump);
-            self.state = PlayerState::Jumping;
+            self.start_jump(c, 1);
             self.move_by(0, -1);
-            self.jump_step = 1;
             return false;
         }
         if (self.pressed(Buttons::DOWN) && self.pressed(Buttons::JUMP)) || above != Hit::Hang {
             // Let go; the fall starts next frame.
-            self.jump_latch = true;
-            self.state = PlayerState::Falling;
-            self.fall_step = 0;
-            self.frame = frame::AIR;
+            self.let_go();
             return true;
         }
         if self.pressed(Buttons::DOWN) {
@@ -999,9 +998,11 @@ impl Player {
         if self.jump_step == 1 || self.jump_step == 2 {
             // Rising two tiles: look a second tile ahead for a pipe or the ceiling.
             match self.check(c, 0, -2, frame::STAND, Dir::Up) {
+                // A pipe in reach while jumping: hang from it right away.
                 Hit::Hang => {
                     self.move_by(0, -1);
-                    return self.grab_pipe_in_jump(c);
+                    self.grab_pipe(c);
+                    return false;
                 }
                 Hit::Solid => {
                     self.jump_step = 4;
@@ -1016,7 +1017,10 @@ impl Player {
             return false;
         }
         match self.check(c, 0, -1, frame::STAND, Dir::Up) {
-            Hit::Hang => return self.grab_pipe_in_jump(c),
+            Hit::Hang => {
+                self.grab_pipe(c);
+                return false;
+            }
             Hit::Solid if self.jump_step < 6 => {
                 self.start_fall();
                 return false;
@@ -1049,12 +1053,6 @@ impl Player {
         true
     }
 
-    /// A pipe in reach while jumping: hang from it right away.
-    fn grab_pipe_in_jump(&mut self, c: &mut Ctx) -> bool {
-        self.grab_pipe(c);
-        false
-    }
-
     /// On a ladder: jump off, climb two frames to the tile, or drop off the foot.
     fn climb(&mut self, c: &mut Ctx) -> bool {
         self.fall_step = 0;
@@ -1070,10 +1068,7 @@ impl Player {
             if self.pressed(Buttons::RIGHT) {
                 self.move_by(1, 0);
             }
-            self.jump_latch = true;
-            self.state = PlayerState::Jumping;
-            Self::sound(c, Sound::Jump);
-            self.jump_step = 1;
+            self.start_jump(c, 1);
             return false;
         }
         if self.pressed(Buttons::UP) && self.check(c, 0, -1, frame::CLIMB_B, Dir::Up) == Hit::Climb

@@ -17,12 +17,27 @@ use dn2_game::Sound;
 use dn2_game::state::Tallies;
 use dn2_render::Screen;
 
-use crate::draw::Gfx;
-use crate::{Ctx, UiEvent};
+use crate::Ctx;
 
 /// Ticks of a whole fade out (16 steps of 2) and fade in (15 steps of 2).
 pub const FADE_OUT_TICKS: u32 = 32;
 pub const FADE_IN_TICKS: u32 = 30;
+
+/// Sets the screen's fade for `elapsed` ticks of a fade in; true while the
+/// fade runs.
+pub(crate) fn fade_in(screen: &mut Screen, elapsed: u32) -> bool {
+    let steps = u32::from(Screen::FADE_STEPS);
+    screen.fade = (elapsed * steps / FADE_IN_TICKS).min(steps) as u8;
+    elapsed < FADE_IN_TICKS
+}
+
+/// Sets the screen's fade for `elapsed` ticks of a fade out; true while the
+/// fade runs.
+pub(crate) fn fade_out(screen: &mut Screen, elapsed: u32) -> bool {
+    let left = FADE_OUT_TICKS.saturating_sub(elapsed);
+    screen.fade = (left * u32::from(Screen::FADE_STEPS) / FADE_OUT_TICKS) as u8;
+    elapsed < FADE_OUT_TICKS
+}
 
 /// One thing a scene does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +82,22 @@ pub enum Step {
     /// the steps up to the next one (or the end) at once, without their
     /// waits and sounds.
     Skip,
+}
+
+impl Step {
+    /// A string in the big font, `row`, `col`.
+    pub fn big(text: &str, row: i32, col: i32) -> Self {
+        Step::Big {
+            text: String::from(text),
+            row,
+            col,
+        }
+    }
+
+    /// Starts a song (an IMF file name).
+    pub fn music(name: &str) -> Self {
+        Step::Music(Some(String::from(name)))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,9 +186,7 @@ impl Scene {
                 }
                 Wait::FadeIn(elapsed) => {
                     let elapsed = elapsed + budget;
-                    let steps = u32::from(Screen::FADE_STEPS);
-                    ctx.screen.fade = (elapsed * steps / FADE_IN_TICKS).min(steps) as u8;
-                    if elapsed < FADE_IN_TICKS {
+                    if fade_in(ctx.screen, elapsed) {
                         self.wait = Wait::FadeIn(elapsed);
                         return false;
                     }
@@ -166,9 +195,7 @@ impl Scene {
                 }
                 Wait::FadeOut(elapsed) => {
                     let elapsed = elapsed + budget;
-                    let left = FADE_OUT_TICKS.saturating_sub(elapsed);
-                    ctx.screen.fade = (left * u32::from(Screen::FADE_STEPS) / FADE_OUT_TICKS) as u8;
-                    if elapsed < FADE_OUT_TICKS {
+                    if fade_out(ctx.screen, elapsed) {
                         self.wait = Wait::FadeOut(elapsed);
                         return false;
                     }
@@ -198,12 +225,7 @@ impl Scene {
     fn run_one_at(&mut self, ctx: &mut Ctx, at: usize, pressed: &mut bool) {
         let step = self.steps[at].clone();
         let data = ctx.data;
-        let gfx = Gfx {
-            status: &data.status,
-            sprites: &data.sprites,
-            font: &data.font,
-            hd: &data.hd,
-        };
+        let gfx = ctx.gfx();
         match step {
             Step::FadeOut => self.wait = Wait::FadeOut(0),
             Step::FadeIn => {
@@ -226,7 +248,7 @@ impl Scene {
             }
             Step::TallyLeft { value } => gfx.number_text(ctx.screen, value, 0x12, 0x16),
             Step::Sound(sound) => ctx.sound(sound),
-            Step::Music(name) => ctx.events.push(UiEvent::Music(name)),
+            Step::Music(name) => ctx.music(name.as_deref()),
             Step::TheEnd => {
                 // Sprite 175 (30 by 7 tiles), 5 columns in and at pixel row 65,
                 // where the original leaves it after rising.
@@ -293,11 +315,7 @@ const TALLY_COL: i32 = 6;
 
 fn tally(steps: &mut Vec<Step>, range: core::ops::Range<usize>, delay: u32) {
     for i in range {
-        steps.push(Step::Big {
-            text: String::from(TALLY_STRINGS[i]),
-            row: TALLY_ROW,
-            col: TALLY_COL,
-        });
+        steps.push(Step::big(TALLY_STRINGS[i], TALLY_ROW, TALLY_COL));
         steps.push(Step::Wait(delay));
     }
 }
@@ -328,11 +346,7 @@ fn bonus_tally(steps: &mut Vec<Step>, n: u8) {
         });
         steps.push(Step::Sound(Sound::BigExplosion));
         steps.push(Step::Wait(0xbe));
-        steps.push(Step::Big {
-            text: String::from("  100000 PTS  "),
-            row: TALLY_ROW,
-            col: TALLY_COL,
-        });
+        steps.push(Step::big("  100000 PTS  ", TALLY_ROW, TALLY_COL));
         steps.push(Step::Wait(100));
         for i in 0..100u32 {
             steps.push(Step::AddScore(1000));
@@ -342,11 +356,7 @@ fn bonus_tally(steps: &mut Vec<Step>, n: u8) {
             });
             steps.push(Step::Sound(Sound::Jump));
         }
-        steps.push(Step::Big {
-            text: String::from("       0 PTS  "),
-            row: TALLY_ROW,
-            col: TALLY_COL,
-        });
+        steps.push(Step::big("       0 PTS  ", TALLY_ROW, TALLY_COL));
         // A key during the countdown completes it.
         steps.push(Step::Skip);
         steps.push(Step::Sound(Sound::BigExplosion));
@@ -380,13 +390,9 @@ pub fn secret_bonuses(tally: &Tallies, was_hurt: bool) -> Vec<u8> {
 pub fn bonus_screen(score: u32, bonuses: &[u8], last_level: bool) -> Vec<Step> {
     let mut steps = alloc::vec![Step::FadeOut, Step::Image(String::from("BONUSSCN.MNI"))];
     if !last_level {
-        steps.push(Step::Music(Some(String::from("OPNGATEA.IMF"))));
+        steps.push(Step::music("OPNGATEA.IMF"));
     }
-    steps.push(Step::Big {
-        text: String::from("SCORE"),
-        row: 9,
-        col: 6,
-    });
+    steps.push(Step::big("SCORE", 9, 6));
     steps.push(Step::Number {
         value: score,
         row: 9,
@@ -429,7 +435,7 @@ pub fn loading_screen(episode: u8) -> Vec<Step> {
     };
     let mut steps = alloc::vec![
         Step::FadeOut,
-        Step::Music(Some(String::from("MENUSNG2.IMF"))),
+        Step::music("MENUSNG2.IMF"),
         Step::Image(format!("LOAD{episode}.MNI")),
         Step::FadeIn,
     ];
@@ -447,11 +453,7 @@ pub fn loading_screen(episode: u8) -> Vec<Step> {
 /// The end of an episode: NEVRENDA.IMF, the pictures of the episode (from 1),
 /// "THE END" for the last one, then the bonus screen.
 pub fn episode_end(episode: u8, score: u32, bonuses: &[u8]) -> Vec<Step> {
-    let mut steps = alloc::vec![
-        Step::Music(Some(String::from("NEVRENDA.IMF"))),
-        Step::FadeOut,
-        Step::Wait(0x8c),
-    ];
+    let mut steps = alloc::vec![Step::music("NEVRENDA.IMF"), Step::FadeOut, Step::Wait(0x8c),];
     let pictures: &[&str] = match episode {
         1 => &["END1-3.MNI", "END1-1.MNI", "END1-2.MNI"],
         2 => &["END2-1.MNI"],

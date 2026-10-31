@@ -9,7 +9,7 @@
 use dn2_assets::sprites::Sprites;
 use dn2_assets::tileset::TileAttributes;
 
-use crate::draw::{Draw, Placed, Sprite, SpriteLook, on_screen, overlap};
+use crate::draw::{Draw, Placed, on_screen, overlap};
 use crate::map::{Dir, Hit, Map};
 use crate::{GameEvent, Random, Sound};
 
@@ -135,8 +135,28 @@ pub struct Effects {
     pub slots: [Option<Effect>; MAX_EFFECTS],
 }
 
+/// An effect's box, for the box tests: its sprite at its position.
+fn placed(e: &Effect, frame: u16) -> Placed {
+    Placed {
+        id: e.id,
+        frame,
+        x: e.x,
+        y: e.y,
+    }
+}
+
+/// Whether an effect waits its delay: counts it down and says so.
+fn waiting(e: &mut Effect) -> bool {
+    if e.delay > 0 {
+        e.delay -= 1;
+        return true;
+    }
+    false
+}
+
 impl Effects {
     /// The effects playing, in slot order.
+    #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = &Effect> {
         self.slots.iter().flatten()
     }
@@ -211,19 +231,7 @@ impl Effects {
     /// Whether a burning fire overlaps `p` (what hurts actors).
     pub fn fire_touches(&self, sprites: &Sprites, map_width: u16, p: Placed) -> bool {
         self.slots.iter().flatten().any(|e| {
-            e.id == FIRE
-                && e.delay <= 1
-                && overlap(
-                    sprites,
-                    map_width,
-                    p,
-                    Placed {
-                        id: FIRE,
-                        frame: e.frame,
-                        x: e.x,
-                        y: e.y,
-                    },
-                )
+            e.id == FIRE && e.delay <= 1 && overlap(sprites, map_width, p, placed(e, e.frame))
         })
     }
 
@@ -242,12 +250,6 @@ impl Effects {
 
     /// One frame of an effect; false when it is over.
     fn step(&mut self, e: &mut Effect, c: &mut EffectCtx) -> bool {
-        let placed = |e: &Effect, frame| Placed {
-            id: e.id,
-            frame,
-            x: e.x,
-            y: e.y,
-        };
         match e.motion {
             Motion::Float => {
                 e.step += 1;
@@ -280,8 +282,7 @@ impl Effects {
                 if !on_screen(c.sprites, c.camera, placed(e, e.frame)) {
                     return false;
                 }
-                if e.delay > 0 {
-                    e.delay -= 1;
+                if waiting(e) {
                     return true;
                 }
                 if e.id == EXPLOSION_START && e.frame == 0 {
@@ -306,8 +307,7 @@ impl Effects {
                 if e.step > 0x11 && !on_screen(c.sprites, c.camera, placed(e, e.frame)) {
                     return false;
                 }
-                if e.delay > 0 {
-                    e.delay -= 1;
+                if waiting(e) {
                     return true;
                 }
                 draw(c, e, e.frame);
@@ -360,13 +360,7 @@ pub fn explosion_sound(random: &mut Random) -> Sound {
 }
 
 fn draw(c: &mut EffectCtx, e: &Effect, frame: u16) {
-    c.draws.push(Draw::Sprite(Sprite {
-        id: e.id,
-        frame,
-        x: e.x,
-        y: e.y,
-        look: SpriteLook::Normal,
-    }));
+    c.draws.push(Draw::sprite(e.id, frame, e.x, e.y));
 }
 
 fn hurt_if_touching(e: &Effect, c: &mut EffectCtx) {
@@ -374,13 +368,7 @@ fn hurt_if_touching(e: &Effect, c: &mut EffectCtx) {
         return;
     }
     // The frame it shows next.
-    let p = Placed {
-        id: e.id,
-        frame: e.frame,
-        x: e.x,
-        y: e.y,
-    };
-    if overlap(c.sprites, c.map.width, p, c.player) {
+    if overlap(c.sprites, c.map.width, placed(e, e.frame), c.player) {
         c.hurt = true;
     }
 }
