@@ -191,21 +191,19 @@ impl Engine {
         })
     }
 
-    pub fn data(&self) -> &GameData {
-        &self.data
-    }
-
-    pub fn platform(&mut self) -> &mut dyn Platform {
-        &mut *self.platform
+    /// The screen on show now: the game's, or the engine's own (the asset
+    /// viewer and the level browser draw on it).
+    fn shown(&self) -> &Screen {
+        match (&self.app, self.mode) {
+            (Some(app), Mode::Game) => app.screen(),
+            _ => &self.screen,
+        }
     }
 
     /// The size [`Engine::render`] draws at now: the asset viewer and the
     /// level browser are the original's size, the game may be wider.
     pub fn frame_size(&self) -> (u32, u32) {
-        let screen = match (&self.app, self.mode) {
-            (Some(app), Mode::Game) => app.screen(),
-            _ => &self.screen,
-        };
+        let screen = self.shown();
         (
             screen.image.width * self.settings.scale,
             screen.image.height * self.settings.scale,
@@ -371,15 +369,9 @@ impl Engine {
         match self.mode {
             Mode::Viewer => self.viewer.draw(&self.data, &mut self.screen),
             Mode::Browser => self.browser.draw(&self.data, &mut self.screen),
-            Mode::Game => {
-                if let Some(app) = &self.app {
-                    app.screen()
-                        .present(frame, self.settings.scale, self.settings.filter);
-                    return;
-                }
-            }
+            Mode::Game => {}
         }
-        self.screen
+        self.shown()
             .present(frame, self.settings.scale, self.settings.filter);
     }
 }

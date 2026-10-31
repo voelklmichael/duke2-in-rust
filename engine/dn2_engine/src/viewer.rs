@@ -3,6 +3,8 @@
 //! Left/Right the item, Up/Down the page within an item (masked tiles, more
 //! sprite frames).
 
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
 use core::fmt;
 
 use dn2_assets::GameData;
@@ -115,34 +117,23 @@ impl Viewer {
     fn item<'a>(&self, data: &'a GameData) -> Option<Item<'a>> {
         let i = self.item;
         match self.category {
-            Category::Pictures => data
-                .pictures
-                .iter()
-                .nth(i)
-                .map(|(n, p)| Item::Picture(n, p)),
-            Category::Backdrops => data
-                .backdrops
-                .iter()
-                .nth(i)
-                .map(|(n, b)| Item::Backdrop(n, b)),
-            Category::Tilesets => data
-                .tilesets
-                .iter()
-                .nth(i)
-                .map(|(n, t)| Item::Tileset(n, t)),
+            Category::Pictures => nth(&data.pictures, i, Item::Picture),
+            Category::Backdrops => nth(&data.backdrops, i, Item::Backdrop),
+            Category::Tilesets => nth(&data.tilesets, i, Item::Tileset),
             Category::Status => (i == 0).then_some(Item::Status),
             Category::Sprites => sprites(data).nth(i).map(|(id, s)| Item::Sprite(id, s)),
-            Category::Movies => data.movies.iter().nth(i).map(|(n, m)| Item::Movie(n, m)),
+            Category::Movies => nth(&data.movies, i, Item::Movie),
         }
     }
 
     fn announce(&self, data: &GameData) {
         let page = self.page + 1;
         let (number, count) = (self.item + 1, self.item_count(data));
-        match self.item(data) {
-            Some(item) => log::info!("{:?} {number}/{count}: {item}, page {page}", self.category),
-            None => log::info!("{:?} {number}/{count}: (none), page {page}", self.category),
-        }
+        let shown = match self.item(data) {
+            Some(item) => item.to_string(),
+            None => "(none)".to_string(),
+        };
+        log::info!("{:?} {number}/{count}: {shown}, page {page}", self.category);
     }
 
     pub fn key(&mut self, key: Key, data: &GameData) {
@@ -219,6 +210,15 @@ impl Viewer {
             }
         }
     }
+}
+
+/// The `i`th entry of `map` as an item, with its name.
+fn nth<'a, T>(
+    map: &'a BTreeMap<String, T>,
+    i: usize,
+    item: fn(&'a str, &'a T) -> Item<'a>,
+) -> Option<Item<'a>> {
+    map.iter().nth(i).map(|(name, value)| item(name, value))
 }
 
 /// The actors that have a sprite, by id.

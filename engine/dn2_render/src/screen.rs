@@ -1,6 +1,7 @@
 use dn2_assets::gfx::{Image, Palette, Rgb, RgbaImage, TRANSPARENT};
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use crate::FrameBuffer;
 use crate::scale::{Filter, upscale};
@@ -19,7 +20,7 @@ pub struct Screen {
     /// the steps here are 0..=15 of that.
     pub fade: u8,
     /// Where the left edge of the original's 320-pixel picture is, on a
-    /// widescreen: [`Self::draw`], [`Self::put`] and [`Self::plot`] add it.
+    /// widescreen: [`Self::draw`] and [`Self::put`] add it.
     /// The game's view and status bar use the whole width and set it to 0
     /// while they draw.
     pub left: i32,
@@ -49,6 +50,18 @@ pub struct HdBlock<'a> {
     pub color: Option<u32>,
 }
 
+impl<'a> HdBlock<'a> {
+    /// The block with its top left at `x`, `y` of `image`, in its colours.
+    pub(crate) fn at(image: &'a RgbaImage, x: u32, y: u32) -> Self {
+        Self {
+            image,
+            x,
+            y,
+            color: None,
+        }
+    }
+}
+
 /// The higher-detail picture of something drawn: its pixel `px`, `py` is
 /// the block at `x + px * scale`, `y + py * scale` of `image`.
 #[derive(Clone, Copy, Debug)]
@@ -64,13 +77,8 @@ impl<'a> HdPicture<'a> {
         Self { image, x: 0, y: 0 }
     }
 
-    fn block(self, scale: u32, px: u32, py: u32) -> HdBlock<'a> {
-        HdBlock {
-            image: self.image,
-            x: self.x + px * scale,
-            y: self.y + py * scale,
-            color: None,
-        }
+    pub(crate) fn block(self, scale: u32, px: u32, py: u32) -> HdBlock<'a> {
+        HdBlock::at(self.image, self.x + px * scale, self.y + py * scale)
     }
 }
 
@@ -111,22 +119,12 @@ impl Screen {
     /// The brightness of an unfaded screen.
     pub const FADE_STEPS: u8 = 15;
 
-    /// [`Self::left`] for the original's picture in the middle.
-    pub fn centred_left(&self) -> i32 {
-        (self.image.width.saturating_sub(ORIGINAL_WIDTH) / 2) as i32
-    }
-
-    /// Sets the pixel at `x`, `y` (plus [`Self::left`]) to `f(old)`, if it
-    /// is on the screen.
-    pub fn plot(&mut self, x: i32, y: i32, f: impl FnOnce(u8) -> u8) {
-        self.plot_at(x + self.left, y, f);
-    }
-
-    /// [`Self::plot`] without [`Self::left`]. The pixel's block of the
-    /// overlay is cleared: it shows the new pixel.
+    /// Sets the pixel at `x`, `y` (without [`Self::left`]) to `f(old)`, if it
+    /// is on the screen. The pixel's block of the overlay is cleared: it
+    /// shows the new pixel.
     pub fn plot_at(&mut self, x: i32, y: i32, f: impl FnOnce(u8) -> u8) {
         let image = &mut self.image;
-        if (0..image.width as i32).contains(&x) && (0..image.height as i32).contains(&y) {
+        if on_screen(image, x, y) {
             let (x, y) = (x as u32, y as u32);
             let pixel = &mut image.pixels[(y * image.width + x) as usize];
             *pixel = f(*pixel);
@@ -156,18 +154,15 @@ impl Screen {
             return;
         };
         let n = hd.scale;
-        let fits = block.x + n <= block.image.width && block.y + n <= block.image.height;
-        if !fits || !(0..image.width as i32).contains(&x) || !(0..image.height as i32).contains(&y)
-        {
+        if !fits(&block, n) || !on_screen(image, x, y) {
             return;
         }
         let (x, y) = (x as u32, y as u32);
         let width = image.width * n;
         for row in 0..n {
-            let start = ((y * n + row) * width + x * n) as usize;
-            let from = ((block.y + row) * block.image.width + block.x) as usize;
-            let line = &block.image.pixels[from..from + n as usize];
-            for (out, &p) in hd.pixels[start..start + n as usize].iter_mut().zip(line) {
+            let line = &block.image.pixels[row_span(block.image.width, block.x, block.y + row, n)];
+            let out_row = &mut hd.pixels[row_span(width, x * n, y * n + row, n)];
+            for (out, &p) in out_row.iter_mut().zip(line) {
                 if p >> 24 >= 0x80 {
                     *out = OPAQUE | (block.color.unwrap_or(p) & 0xff_ffff);
                 }
@@ -189,9 +184,7 @@ impl Screen {
             return self.plot_at(x, y, |_| pixel);
         };
         let n = hd.scale;
-        let fits = ink.x + n <= ink.image.width && ink.y + n <= ink.image.height;
-        if !fits || !(0..image.width as i32).contains(&x) || !(0..image.height as i32).contains(&y)
-        {
+        if !fits(&ink, n) || !on_screen(image, x, y) {
             return self.plot_at(x, y, |_| pixel);
         }
         let (x, y) = (x as u32, y as u32);
@@ -205,10 +198,9 @@ impl Screen {
         let background = OPAQUE | self.palette.get(under).to_u32();
         let width = image.width * n;
         for row in 0..n {
-            let start = ((y * n + row) * width + x * n) as usize;
-            let from = ((ink.y + row) * ink.image.width + ink.x) as usize;
-            let line = &ink.image.pixels[from..from + n as usize];
-            for (out, &p) in hd.pixels[start..start + n as usize].iter_mut().zip(line) {
+            let line = &ink.image.pixels[row_span(ink.image.width, ink.x, ink.y + row, n)];
+            let out_row = &mut hd.pixels[row_span(width, x * n, y * n + row, n)];
+            for (out, &p) in out_row.iter_mut().zip(line) {
                 *out = if p >> 24 >= 0x80 {
                     tinted(p)
                 } else if under == old && *out != 0 {
@@ -224,14 +216,13 @@ impl Screen {
 
     /// Sets the pixel at `x`, `y` (plus [`Self::left`]), if on the screen.
     pub fn put(&mut self, x: i32, y: i32, pixel: u8) {
-        self.plot(x, y, |_| pixel);
+        self.plot_at(x + self.left, y, |_| pixel);
     }
 
     /// The pixel at `x`, `y` (plus [`Self::left`]), if on the screen.
     pub fn pixel(&self, x: i32, y: i32) -> Option<u8> {
         let (x, image) = (x + self.left, &self.image);
-        ((0..image.width as i32).contains(&x) && (0..image.height as i32).contains(&y))
-            .then(|| image.get(x as u32, y as u32))
+        on_screen(image, x, y).then(|| image.get(x as u32, y as u32))
     }
 
     /// Copies the pixel at `sx`, `sy` of `from` (without its
@@ -245,19 +236,15 @@ impl Screen {
             return;
         };
         let image = &self.image;
-        if hd.scale != source.scale
-            || !(0..image.width as i32).contains(&x)
-            || !(0..image.height as i32).contains(&y)
-        {
+        if hd.scale != source.scale || !on_screen(image, x, y) {
             return;
         }
         let n = hd.scale;
         let (width, source_width) = (image.width * n, from.image.width * n);
         for row in 0..n {
-            let start = ((y as u32 * n + row) * width + x as u32 * n) as usize;
-            let from = ((sy * n + row) * source_width + sx * n) as usize;
-            hd.pixels[start..start + n as usize]
-                .copy_from_slice(&source.pixels[from..from + n as usize]);
+            let dest = row_span(width, x as u32 * n, y as u32 * n + row, n);
+            let src = row_span(source_width, sx * n, sy * n + row, n);
+            hd.pixels[dest].copy_from_slice(&source.pixels[src]);
         }
     }
 
@@ -295,16 +282,15 @@ impl Screen {
 
     /// The palette as presented: [`Self::fade`] applied.
     pub fn faded_palette(&self) -> Palette {
-        let level = u16::from(self.fade.min(Self::FADE_STEPS));
-        let dim = |v: u8| (u16::from(v) * level / u16::from(Self::FADE_STEPS)) as u8;
+        let level = self.fade.min(Self::FADE_STEPS);
         Palette(
             self.palette
                 .0
                 .iter()
                 .map(|c| Rgb {
-                    r: dim(c.r),
-                    g: dim(c.g),
-                    b: dim(c.b),
+                    r: dim(c.r, level),
+                    g: dim(c.g, level),
+                    b: dim(c.b, level),
                 })
                 .collect(),
         )
@@ -351,30 +337,30 @@ impl Screen {
         }
     }
 
-    /// [`Self::show`] with a higher-detail picture of `image`.
-    pub fn show_hd(&mut self, image: &Image, hd: Option<&RgbaImage>) {
-        let (Some(hd), Some(scale)) = (hd, self.hd_scale()) else {
-            return self.show(image);
-        };
-        self.clear(0);
-        let hd = HdPicture::new(hd);
-        for y in 0..image.height.min(self.image.height) {
-            for x in 0..image.width {
-                let pixel = image.get(x, y);
-                let block = hd.block(scale, x, y);
-                self.plot_hd(x as i32 + self.left, y as i32, Some(pixel), block);
-            }
-        }
-    }
-
     /// Shows a full-screen picture: the screen is cleared and `image`
     /// copied as it is (all 256 colours, none transparent) with its top
     /// left at 0, 0 (plus [`Self::left`]).
     pub fn show(&mut self, image: &Image) {
+        self.show_hd(image, None);
+    }
+
+    /// [`Self::show`] with a higher-detail picture of `image`, if `hd` is
+    /// given and the overlay is on; otherwise as [`Self::show`].
+    pub fn show_hd(&mut self, image: &Image, hd: Option<&RgbaImage>) {
         self.clear(0);
+        let hd = hd
+            .zip(self.hd_scale())
+            .map(|(hd, scale)| (HdPicture::new(hd), scale));
         for y in 0..image.height.min(self.image.height) {
             for x in 0..image.width {
-                self.put(x as i32, y as i32, image.get(x, y));
+                let pixel = image.get(x, y);
+                match hd {
+                    Some((hd, scale)) => {
+                        let block = hd.block(scale, x, y);
+                        self.plot_hd(x as i32 + self.left, y as i32, Some(pixel), block);
+                    }
+                    None => self.put(x as i32, y as i32, pixel),
+                }
             }
         }
     }
@@ -405,14 +391,36 @@ impl Screen {
         let Some(hd) = self.hd.as_ref().filter(|hd| hd.scale == scale) else {
             return;
         };
-        let level = u32::from(self.fade.min(Self::FADE_STEPS));
-        let dim = |v: u32| (v & 0xff) * level / u32::from(Self::FADE_STEPS);
+        let level = self.fade.min(Self::FADE_STEPS);
         for (pixel, &p) in frame.pixels.iter_mut().zip(&hd.pixels) {
             if p != 0 {
-                *pixel = (dim(p >> 16) << 16) | (dim(p >> 8) << 8) | dim(p);
+                let channel = |shift: u32| u32::from(dim((p >> shift) as u8, level)) << shift;
+                *pixel = channel(16) | channel(8) | channel(0);
             }
         }
     }
+}
+
+/// `v` at brightness `level` (0 to [`Screen::FADE_STEPS`]).
+fn dim(v: u8, level: u8) -> u8 {
+    (u16::from(v) * u16::from(level) / u16::from(Screen::FADE_STEPS)) as u8
+}
+
+/// Whether `x`, `y` is a pixel of `image`.
+fn on_screen(image: &Image, x: i32, y: i32) -> bool {
+    (0..image.width as i32).contains(&x) && (0..image.height as i32).contains(&y)
+}
+
+/// Whether the `n` by `n` pixels of `block` are inside its picture.
+fn fits(block: &HdBlock<'_>, n: u32) -> bool {
+    block.x + n <= block.image.width && block.y + n <= block.image.height
+}
+
+/// The `len` pixels from `x`, `y` of a picture `width` pixels wide, as
+/// indices into its pixels.
+fn row_span(width: u32, x: u32, y: u32, len: u32) -> Range<usize> {
+    let start = (y * width + x) as usize;
+    start..start + len as usize
 }
 
 #[cfg(test)]
