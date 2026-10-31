@@ -9,7 +9,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::PhysicalKey;
-use winit::window::{Window, WindowId};
+use winit::window::{Icon, Window, WindowId};
 
 use crate::audio::AudioOut;
 use crate::keys;
@@ -131,6 +131,23 @@ fn blit(frame: &FrameBuffer, dest: &mut [u32], size: (u32, u32), columns: &mut V
     }
 }
 
+/// The web page's icon, for the title bar and task bar. Wayland and macOS
+/// do not take one from the window.
+fn window_icon() -> Option<Icon> {
+    const PNG: &[u8] = include_bytes!("../../dn2_web/www/icon-192.png");
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(PNG));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().ok()?;
+    let mut rgba = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut rgba).ok()?;
+    rgba.truncate(info.buffer_size());
+    if info.color_type != png::ColorType::Rgba {
+        log::warn!("window icon is {:?}, not RGBA", info.color_type);
+        return None;
+    }
+    Icon::from_rgba(rgba, info.width, info.height).ok()
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -138,6 +155,7 @@ impl ApplicationHandler for App {
         }
         let attributes = Window::default_attributes()
             .with_title("Duke Nukem II")
+            .with_window_icon(window_icon())
             .with_inner_size(if self.wide {
                 LogicalSize::new(1280, 720)
             } else {
@@ -219,4 +237,12 @@ impl ApplicationHandler for App {
 fn mix_silently(engine: &mut Engine, ticks: u32) {
     let mut samples = vec![0.0; (ticks * SILENT_RATE / TICK_HZ) as usize];
     engine.mix_audio(&mut samples, SILENT_RATE);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_decodes() {
+        assert!(super::window_icon().is_some());
+    }
 }
