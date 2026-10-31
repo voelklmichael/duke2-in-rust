@@ -286,6 +286,26 @@ fn widescreen_menus_and_game() {
 }
 
 #[test]
+fn a_key_skips_the_advertisement() {
+    let Some(data) = data() else { return };
+    // Without a configuration: the first run, with the advertisement.
+    let store = Memory::default();
+    let app = App::new(&data, &store);
+    let mut d = Driver {
+        data,
+        store,
+        app,
+        events: Vec::new(),
+        shot: 100,
+    };
+    d.press(Key::Enter);
+    assert_eq!(d.mode(), "menu Hype");
+    d.settle(20);
+    d.press(Key::Space);
+    d.until("movie 0", None, 20);
+}
+
+#[test]
 fn the_end_of_the_fanfare_ends_the_intro() {
     let Some(data) = data() else { return };
     let mut store = Memory::default();

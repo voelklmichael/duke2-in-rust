@@ -363,6 +363,9 @@ impl Flow<'_> {
                 }
                 self.fanfare()
             }
+            // A key skips the advertisement, which the original shows to
+            // its end: three pictures, ten seconds of delays.
+            Mode::Script(_, Menu::Hype) if !ctx.pressed.is_empty() => self.fanfare(),
             Mode::Script(mut runner, menu) => {
                 let (episode, level) = (1, 1);
                 match runner.step(ctx, &mut self.shared.env(episode, level)) {
