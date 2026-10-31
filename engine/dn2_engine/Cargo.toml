@@ -1,0 +1,15 @@
+[package]
+name = "dn2_engine"
+version = "0.1.0"
+description = "Duke Nukem II engine: the Platform trait and the Engine that frontends drive"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+dn2_assets.workspace = true
+dn2_audio.workspace = true
+dn2_game.workspace = true
+dn2_render.workspace = true
+dn2_ui.workspace = true
+log.workspace = true
+thiserror.workspace = true

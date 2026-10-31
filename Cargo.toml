@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = [
+    "engine/dn2_assets",
+    "engine/dn2_game",
+    "engine/dn2_render",
+    "engine/dn2_ui",
+    "engine/dn2_audio",
+    "engine/dn2_engine",
+    "frontends/dn2_desktop",
+    "frontends/dn2_web",
+]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+# Engine crates are no_std: their dependencies go without default features.
+log = { version = "0.4", default-features = false }
+thiserror = { version = "2", default-features = false }
+bitflags = { version = "2", default-features = false }
+oplon = "1"
+
+dn2_assets = { path = "engine/dn2_assets" }
+dn2_game = { path = "engine/dn2_game" }
+dn2_render = { path = "engine/dn2_render" }
+dn2_ui = { path = "engine/dn2_ui" }
+dn2_audio = { path = "engine/dn2_audio" }
+dn2_engine = { path = "engine/dn2_engine" }
