@@ -2,7 +2,7 @@
 //! exit, key holes and card slots, force fields, water, map section
 //! markers and the like. The simple objects are in [`super::objects`].
 
-use super::objects::{self, near_x};
+use super::objects;
 use super::{Actor, Ctx, Kind, Update};
 use crate::draw::{Placed, SpriteLook};
 use crate::map::{Dir, Hit};
@@ -138,12 +138,6 @@ pub(super) fn touch(a: &mut Actor, c: &mut Ctx) -> bool {
     true
 }
 
-/// The player's position as signed tiles.
-fn player_pos(c: &Ctx) -> (i32, i32) {
-    let p = c.player_placed();
-    (p.x, p.y)
-}
-
 // ---------------------------------------------------------------------
 // Doors
 
@@ -164,9 +158,7 @@ pub struct VerticalDoor {
 }
 
 fn vertical_door(a: &mut Actor, c: &mut Ctx) {
-    let Kind::Machine(State::VerticalDoor(s)) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Machine(State::VerticalDoor));
     a.look = SpriteLook::Hidden;
     let (x, y) = (a.x, a.y);
     // The row of tile `u` of the door, counting up from the one below it.
@@ -182,11 +174,9 @@ fn vertical_door(a: &mut Actor, c: &mut Ctx) {
     }
     let solid = s.solid;
     let open = s.open;
-    let (_, py) = player_pos(c);
-    let near = near_x(c, a, 7);
-    let Kind::Machine(State::VerticalDoor(s)) = &mut a.kind else {
-        return;
-    };
+    let (_, py) = c.player_at();
+    let near = c.near_x(a, 7);
+    let s = state!(a, Machine(State::VerticalDoor));
     let draw_from = |c: &mut Ctx, u: u16| {
         if u != 0 {
             c.draw(
@@ -236,22 +226,25 @@ pub struct HorizontalDoor {
     solid: u16,
 }
 
+/// Writes the hatch's five cells in its row, from `x` on.
+fn hatch_row(c: &mut Ctx, x: i32, y: i32, cells: [u16; 5]) {
+    for (n, cell) in cells.into_iter().enumerate() {
+        c.map.set_cell(x + n as i32, y, cell);
+    }
+}
+
 fn horizontal_door(a: &mut Actor, c: &mut Ctx) {
-    let Kind::Machine(State::HorizontalDoor(s)) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Machine(State::HorizontalDoor));
     let (x, y) = (a.x, a.y);
     if s.solid == 0 {
         for n in 0..5 {
             s.saved[n] = c.map.cell(x + n as i32, y);
         }
         s.solid = c.map.fully_solid_cell();
-        for n in 0..5 {
-            c.map.set_cell(x + n, y, s.solid);
-        }
+        hatch_row(c, x, y, [s.solid; 5]);
     }
     let solid = s.solid;
-    let (px, py) = player_pos(c);
+    let (px, py) = c.player_at();
     let away = px < x - 2 || x + 6 <= px || py <= y - 3 || y + 7 <= py;
     if away {
         if a.frame != 0 {
@@ -260,16 +253,12 @@ fn horizontal_door(a: &mut Actor, c: &mut Ctx) {
             }
             a.frame -= 1;
             if a.frame == 0 {
-                for n in 0..5 {
-                    c.map.set_cell(x + n, y, solid);
-                }
+                hatch_row(c, x, y, [solid; 5]);
             }
         }
     } else {
         if a.frame == 0 {
-            for n in 0..5 {
-                c.map.set_cell(x + n, y, s.saved[n as usize]);
-            }
+            hatch_row(c, x, y, s.saved);
             c.sound(Sound::Door);
         }
         if a.frame < 2 {
@@ -311,9 +300,7 @@ impl Beacon {
 
 fn respawn_beacon(a: &mut Actor, c: &mut Ctx) {
     let on_screen = c.on_screen(a.placed());
-    let Kind::Machine(State::RespawnBeacon(s)) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Machine(State::RespawnBeacon));
     if s.fresh {
         if on_screen {
             s.timer = 1;
@@ -354,9 +341,7 @@ fn respawn_beacon(a: &mut Actor, c: &mut Ctx) {
 
 /// Touching an unlit beacon lights it.
 fn beacon_touch(a: &mut Actor) {
-    let Kind::Machine(State::RespawnBeacon(s)) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Machine(State::RespawnBeacon));
     if s.timer == 0 && a.frame == 0 {
         s.timer = 0xf;
     }
@@ -466,7 +451,7 @@ fn lift_step(a: &mut Actor, c: &mut Ctx, s: &mut Lift) {
         return;
     }
     let y = a.y;
-    let (px, py) = player_pos(c);
+    let (px, py) = c.player_at();
     let facing_right = c.player.facing == crate::player::Facing::Right;
     let on_it = y - 3 == py
         && ((facing_right && x <= px && px < x + 2) || (!facing_right && x - 1 <= px && px <= x));
@@ -548,7 +533,7 @@ fn lift_step(a: &mut Actor, c: &mut Ctx, s: &mut Lift) {
 /// tiles to its left, the level ends, unless radar dishes are left.
 fn level_exit(a: &mut Actor, c: &mut Ctx) {
     a.look = SpriteLook::Hidden;
-    let (px, py) = player_pos(c);
+    let (px, py) = c.player_at();
     if py <= a.y && px <= a.x && a.x - 2 <= px {
         if c.state.radar_dishes == 0 {
             c.state.exit = Some(LevelExit::Finished);
@@ -595,13 +580,11 @@ const KEY: u16 = 0x79;
 
 /// Type 120: the access card turns the force fields off.
 fn card_slot_touch(a: &mut Actor, c: &mut Ctx) {
-    let (_, py) = player_pos(c);
+    let (_, py) = c.player_at();
     if py - 2 != a.y {
         return;
     }
-    let Kind::Machine(State::AccessCardSlot(s)) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Machine(State::AccessCardSlot));
     if use_item(c, &mut s.ready, ACCESS_CARD) {
         c.state.force_field_off = true;
     }
@@ -625,13 +608,11 @@ fn card_slot_touch(a: &mut Actor, c: &mut Ctx) {
 
 /// Type 122: the key opens the door of the next section.
 fn key_hole_touch(a: &mut Actor, c: &mut Ctx) {
-    let (_, py) = player_pos(c);
+    let (_, py) = c.player_at();
     if py - 2 != a.y {
         return;
     }
-    let Kind::Machine(State::KeyHole(s)) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Machine(State::KeyHole));
     c.state.messages.show_once(once::USE_KEY, text::USE_KEY);
     if use_item(c, &mut s.ready, KEY) {
         c.state.key_used = true;
@@ -711,9 +692,7 @@ fn find_marker(c: &Ctx, start: usize, kind: u16, x: Option<i32>, y: Option<i32>)
 fn section_marker(a: &mut Actor, c: &mut Ctx) {
     a.look = SpriteLook::Hidden;
     let here = a.placed();
-    let Kind::Machine(State::SectionMarker(s)) = &mut a.kind else {
-        return;
-    };
+    let s = state!(a, Machine(State::SectionMarker));
     if c.state.key_used {
         // Only once the marker is in view (5 tiles lower).
         let at = Placed {

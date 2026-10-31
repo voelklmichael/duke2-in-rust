@@ -4,8 +4,9 @@
 //! player's shot over it; then it reacts by the actor's type: most lose health
 //! and, when it runs out, explode for their score.
 
+use super::contact::{FIREWORK, SPARKLE_100, SPARKLE_500, SPARKLE_2000, sparkle};
 use super::items::{BIG_HEALTH, FUSE_ITEM, SODA, spread_fire};
-use super::{Actor, Ctx, Kind};
+use super::{Actor, Ctx, FIRE, Kind};
 use crate::draw::{Placed, overlap};
 use crate::effects::{BLAST, EXPLOSION, EXPLOSION_START, Motion};
 use crate::particles::Spread;
@@ -31,6 +32,13 @@ const WALKER_DEATH: [(i32, i32, u8, u16); 6] = [
 ];
 /// Explosions (`Motion::Still`) around a destroyed robot or turret.
 pub(super) const ROBOT_DEATH: [(i32, i32, u16); 3] = [(0, 0, 0), (-1, -2, 2), (1, -3, 4)];
+
+/// The explosions around a destroyed robot or turret at `x`, `y`.
+pub(super) fn robot_death(c: &mut Ctx, x: i32, y: i32) {
+    for (dx, dy, delay) in ROBOT_DEATH {
+        c.effect(EXPLOSION_START, x + dx, y + dy, Motion::Still, delay);
+    }
+}
 
 /// The damage actor `a` takes this frame: 1 from fire, else from the first
 /// player's shot over it. Shots that stop at it are marked as hit (lasers
@@ -180,7 +188,7 @@ pub fn react(a: &mut Actor, c: &mut Ctx, damage: u8) {
         // Security cameras.
         79 | 80 => {
             c.random_particles(Spread::Both, x, y);
-            c.effect(0x7b, x, y, Motion::Float, 0);
+            sparkle(c, SPARKLE_100, x, y);
             c.state.tally.cameras_destroyed += 1;
             c.explosion_sound();
             c.add_score(100);
@@ -191,24 +199,22 @@ pub fn react(a: &mut Actor, c: &mut Ctx, damage: u8) {
             if !hurt(a, c, damage) {
                 return;
             }
-            for (dx, dy, delay) in ROBOT_DEATH {
-                c.effect(EXPLOSION_START, x + dx, y + dy, Motion::Still, delay);
-            }
+            robot_death(c, x, y);
             c.random_particles(Spread::Both, x, y);
             c.random_particles(Spread::Left, x - 1, y - 1);
             c.random_particles(Spread::Right, x + 1, y - 2);
             match id {
                 236 => {
                     c.state.radar_dishes = c.state.radar_dishes.saturating_sub(1);
-                    c.effect(0x7d, x, y, Motion::Float, 0);
+                    sparkle(c, SPARKLE_2000, x, y);
                     c.add_score(1500);
                 }
                 208 | 252 => {
-                    c.effect(0x7f, x, y, Motion::Float, 0);
+                    sparkle(c, FIREWORK, x, y);
                     c.add_score(10000);
                 }
                 296 => {
-                    c.effect(0x7c, x, y, Motion::Float, 0);
+                    sparkle(c, SPARKLE_500, x, y);
                     c.add_score(500);
                 }
                 _ => {}
@@ -219,9 +225,7 @@ pub fn react(a: &mut Actor, c: &mut Ctx, damage: u8) {
             if !hurt(a, c, damage) {
                 return;
             }
-            let Kind::ItemBox(s) = &mut a.kind else {
-                return;
-            };
+            let s = state!(a, ItemBox);
             if s.stage != super::items::Stage::Closed {
                 return;
             }
@@ -243,11 +247,11 @@ pub fn react(a: &mut Actor, c: &mut Ctx, damage: u8) {
         }
         // Bomb.
         63 => {
-            c.effect(0x2b, x, y, Motion::Still, 0);
+            c.effect(FIRE, x, y, Motion::Still, 0);
             for d in (4..0x14).step_by(4) {
                 let delay = (d / 2) as u16;
-                c.effect(0x2b, x - d, y, Motion::Debris(5), delay);
-                c.effect(0x2b, x + d, y, Motion::Debris(5), delay);
+                c.effect(FIRE, x - d, y, Motion::Debris(5), delay);
+                c.effect(FIRE, x + d, y, Motion::Debris(5), delay);
             }
             c.explosion_sound();
         }
@@ -268,7 +272,7 @@ pub fn react(a: &mut Actor, c: &mut Ctx, damage: u8) {
             }
             a.look = SpriteLook::WhiteFlash;
             c.add_score(100);
-            c.effect(0x7b, x, y, Motion::Float, 0);
+            sparkle(c, SPARKLE_100, x, y);
             c.sound(Sound::Break);
             c.particles(0x0f, Spread::Both, x + 1, y);
             c.state.tally.bonus_globes_left = c.state.tally.bonus_globes_left.wrapping_sub(1);

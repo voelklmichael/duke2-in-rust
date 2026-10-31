@@ -2,15 +2,17 @@
 //! slime pipes, force fields, card slots, water, fire jets and the like.
 //! They animate, spawn something now and then, or hurt the player.
 
+use super::contact::{FIREWORK, sparkle};
+use super::items::HINT_GLOBE;
 use super::machines::State;
-use super::{Actor, ActorFlags, Ctx, Kind, hits};
+use super::{Actor, ActorFlags, Ctx, hits};
 use crate::Sound;
 use crate::draw::{Draw, Placed, SpriteLook};
 use crate::effects::{EXPLOSION_START, Motion};
 use crate::map::Dir;
 use crate::messages::{once, text};
 use crate::particles::Spread;
-use crate::player::{Facing, PlayerState};
+use crate::player::PlayerState;
 use crate::shots::ShotDirection;
 
 /// Placed types and sprites.
@@ -21,7 +23,6 @@ const WATER_DROP: u16 = 0xe2;
 const FORCE_FIELD: u16 = 0x77;
 const FIRE_JET: u16 = 0xe7;
 const RADAR_DISPLAY: u16 = 0xed;
-pub(super) const HINT_GLOBE: u16 = 0xee;
 const PRISONER: u16 = 0xfd;
 const AIRLOCK_LEFT: u16 = 0xfa;
 const HOVERBOT_GENERATOR: u16 = 0x73;
@@ -36,16 +37,6 @@ const DRONE_BODY_RIGHT: u16 = 0x6d;
 const DRONE_DOME: u16 = 0x6e;
 const DRONE_HULL: u16 = 0x6b;
 const DRONE_SCREEN: u16 = 0x6f;
-
-/// `Kind` of an actor of this family: its state, or nothing.
-macro_rules! state {
-    ($a:expr, $variant:ident) => {
-        match &mut $a.kind {
-            Kind::Machine(State::$variant(s)) => s,
-            _ => return,
-        }
-    };
-}
 
 // ---------------------------------------------------------------------
 // Hoverbot generator
@@ -62,7 +53,7 @@ pub struct HoverbotGenerator {
 }
 
 pub(super) fn hoverbot_generator(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, HoverbotGenerator);
+    let s = state!(a, Machine(State::HoverbotGenerator));
     let mut make = false;
     if s.made < HOVERBOTS {
         s.timer += 1;
@@ -76,7 +67,7 @@ pub(super) fn hoverbot_generator(a: &mut Actor, c: &mut Ctx) {
         c.spawn(HOVERBOT, a.x + 1, a.y);
     }
     a.frame = (a.frame + 1) % 4;
-    c.draw(HOVERBOT_GENERATOR, 4, a.x, a.y, SpriteLook::Normal);
+    c.draw_at(HOVERBOT_GENERATOR, 4, a);
 }
 
 // ---------------------------------------------------------------------
@@ -170,7 +161,7 @@ impl MessengerDrone {
 }
 
 pub(super) fn messenger_drone(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, MessengerDrone);
+    let s = state!(a, Machine(State::MessengerDrone));
     let flap = u16::from(c.draw_page);
     if s.heading == Heading::Unset {
         s.heading = if a.x < c.player.x {
@@ -197,25 +188,25 @@ pub(super) fn messenger_drone(a: &mut Actor, c: &mut Ctx) {
         Heading::Left => {
             if flying {
                 a.x -= 2;
-                c.draw(DRONE_JET_LEFT, flap, a.x, a.y, SpriteLook::Normal);
+                c.draw_at(DRONE_JET_LEFT, flap, a);
             }
-            c.draw(DRONE_BODY_LEFT, 0, a.x, a.y, SpriteLook::Normal);
+            c.draw_at(DRONE_BODY_LEFT, 0, a);
         }
         _ => {
             if flying {
                 a.x += 2;
-                c.draw(DRONE_JET_RIGHT, flap, a.x, a.y, SpriteLook::Normal);
+                c.draw_at(DRONE_JET_RIGHT, flap, a);
             }
-            c.draw(DRONE_BODY_RIGHT, 0, a.x, a.y, SpriteLook::Normal);
+            c.draw_at(DRONE_BODY_RIGHT, 0, a);
         }
     }
-    c.draw(DRONE_DOME, 0, a.x, a.y, SpriteLook::Normal);
-    c.draw(DRONE_HULL, 0, a.x, a.y, SpriteLook::Normal);
-    if waiting && near_x(c, a, 6) {
-        let s = state!(a, MessengerDrone);
+    c.draw_at(DRONE_DOME, 0, a);
+    c.draw_at(DRONE_HULL, 0, a);
+    if waiting && c.near_x(a, 6) {
+        let s = state!(a, Machine(State::MessengerDrone));
         s.talk = Talk::Showing { step: 0, wait: 0 };
     }
-    let s = state!(a, MessengerDrone);
+    let s = state!(a, Machine(State::MessengerDrone));
     if let Talk::Showing { step, wait } = s.talk {
         c.draw(DRONE_SCREEN, flap, a.x, a.y, SpriteLook::Normal);
         let row = MESSAGE_PICTURES
@@ -241,11 +232,11 @@ pub(super) fn messenger_drone(a: &mut Actor, c: &mut Ctx) {
                         wait: wait - 1,
                     }
                 };
-                c.draw(picture, u16::from(frame), a.x, a.y, SpriteLook::Normal);
+                c.draw_at(picture, u16::from(frame), a);
             }
         }
     }
-    let done = matches!(state!(a, MessengerDrone).talk, Talk::Done);
+    let done = matches!(state!(a, Machine(State::MessengerDrone)).talk, Talk::Done);
     if done && !c.on_screen(a.placed()) {
         c.remove(a);
     }
@@ -258,19 +249,6 @@ pub(super) fn messenger_drone(a: &mut Actor, c: &mut Ctx) {
         }
     }
     a.look = SpriteLook::Hidden;
-}
-
-/// Whether the horizontal distance between the middle of the actor's sprite and
-/// the player is at most `dist`.
-pub(super) fn near_x(c: &Ctx, a: &Actor, dist: i32) -> bool {
-    let width = crate::map::Map::sprite_body(c.sprites, a.id, a.frame, 0, 0).map_or(0, |b| b.width);
-    let player = c.player.x
-        + if c.player.facing == Facing::Left {
-            2
-        } else {
-            1
-        };
-    (a.x + (width >> 1) - player).abs() <= dist
 }
 
 // ---------------------------------------------------------------------
@@ -286,7 +264,7 @@ pub struct SlimePipe {
 }
 
 pub(super) fn slime_pipe(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, SlimePipe);
+    let s = state!(a, Machine(State::SlimePipe));
     a.look = SpriteLook::OverForeground;
     s.timer = s.timer.wrapping_add(1);
     if s.timer % DRIP_PERIOD == 0 {
@@ -320,9 +298,7 @@ pub(super) fn drip_spawner(a: &mut Actor, c: &mut Ctx) {
     a.look = SpriteLook::Hidden;
     if c.draw_page && c.random.next_byte() > 0xdc {
         c.spawn(WATER_DROP, a.x, a.y);
-        if c.on_screen(a.placed()) {
-            c.sound(Sound::Drip);
-        }
+        c.sound_if_visible(a, Sound::Drip);
     }
 }
 
@@ -340,7 +316,7 @@ pub struct ForceField {
 }
 
 pub(super) fn force_field(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, ForceField);
+    let s = state!(a, Machine(State::ForceField));
     let at = |frame| Placed {
         id: FORCE_FIELD,
         frame,
@@ -361,10 +337,7 @@ pub(super) fn force_field(a: &mut Actor, c: &mut Ctx) {
     }
     if c.touches_player(at(2)) {
         // Deadly whatever the health: the cloak does not help either.
-        c.player.health = 1;
-        c.player.hurt_timer = 0;
-        c.player.cloak_timer = 0;
-        c.hurt_player();
+        c.kill_player();
     }
     s.flicker = s.flicker.wrapping_add(1);
     let frame = s.flicker % 3 + 2;
@@ -396,7 +369,7 @@ impl CardSlot {
 }
 
 pub(super) fn access_card_slot(a: &mut Actor) {
-    let s = state!(a, AccessCardSlot);
+    let s = state!(a, Machine(State::AccessCardSlot));
     if s.ready {
         a.frame += 1;
         if a.frame != 4 {
@@ -427,7 +400,7 @@ impl KeyHole {
 }
 
 pub(super) fn key_hole(a: &mut Actor) {
-    let s = state!(a, KeyHole);
+    let s = state!(a, Machine(State::KeyHole));
     if !s.ready {
         a.frame = 5;
     } else {
@@ -460,7 +433,7 @@ impl Water {
 }
 
 pub(super) fn water(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, Water);
+    let s = state!(a, Machine(State::Water));
     a.look = SpriteLook::Hidden;
     let (x, y) = (a.x, a.y);
     if !s.surface {
@@ -513,7 +486,7 @@ pub struct FireJetState {
 }
 
 pub(super) fn fire_jet(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, FireJet);
+    let s = state!(a, Machine(State::FireJet));
     a.look = SpriteLook::Hidden;
     if s.wait < JET_PAUSE {
         s.wait += 1;
@@ -568,7 +541,7 @@ pub struct RadarCounter {
 }
 
 pub(super) fn radar_counter_display(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, RadarCounter);
+    let s = state!(a, Machine(State::RadarCounter));
     for frame in 1..4 {
         c.draw(RADAR_DISPLAY, frame, a.x, a.y, SpriteLook::Normal);
     }
@@ -588,7 +561,7 @@ pub(super) fn radar_counter_display(a: &mut Actor, c: &mut Ctx) {
     }
     if number {
         a.look = SpriteLook::Hidden;
-        c.draw(RADAR_DISPLAY, 5, a.x, a.y, SpriteLook::Normal);
+        c.draw_at(RADAR_DISPLAY, 5, a);
         c.draw(
             RADAR_DISPLAY,
             u16::from(dishes) + 7,
@@ -606,7 +579,7 @@ pub struct HintPedestal {
 }
 
 pub(super) fn hint_globe_pedestal(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, HintPedestal);
+    let s = state!(a, Machine(State::HintPedestal));
     if s.globe_placed {
         c.draw(HINT_GLOBE, 0, a.x + 1, a.y - 4, SpriteLook::Normal);
     }
@@ -616,7 +589,7 @@ pub(super) fn hint_globe_pedestal(a: &mut Actor, c: &mut Ctx) {
 /// level's hint (`state.hint_requested`), and other messages wait until it
 /// is done.
 pub(super) fn hint_pedestal_touch(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, HintPedestal);
+    let s = state!(a, Machine(State::HintPedestal));
     if s.globe_placed {
         return;
     }
@@ -625,7 +598,7 @@ pub(super) fn hint_pedestal_touch(a: &mut Actor, c: &mut Ctx) {
         c.add_score(50000);
         c.sound(Sound::Pickup);
         for up in 0..5 {
-            c.effect(0x7f, a.x, a.y - up, Motion::Float, 0);
+            sparkle(c, FIREWORK, a.x, a.y - up);
         }
         s.globe_placed = true;
         c.state.hint_requested = true;
@@ -674,7 +647,7 @@ pub struct UnicycleBot {
 }
 
 pub(super) fn unicycle_bot(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, UnicycleBot);
+    let s = state!(a, Machine(State::UnicycleBot));
     if s.idle < UNICYCLE_WAIT {
         s.idle += 1;
         if s.idle == UNICYCLE_WAIT {
@@ -703,7 +676,7 @@ pub(super) fn unicycle_bot(a: &mut Actor, c: &mut Ctx) {
         a.x += step;
     }
     let blocked = c.move_blocked(a, dir);
-    let s = state!(a, UnicycleBot);
+    let s = state!(a, Machine(State::UnicycleBot));
     s.spin = spin;
     if blocked || s.time == 0 {
         s.idle = 0;
@@ -740,7 +713,7 @@ impl RandomCrawler {
 }
 
 pub(super) fn random_crawler(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, RandomCrawler);
+    let s = state!(a, Machine(State::RandomCrawler));
     s.skip = !s.skip;
     if s.skip {
         return;
@@ -777,7 +750,7 @@ pub(super) fn random_crawler(a: &mut Actor, c: &mut Ctx) {
     // A bound only for safety: a crawler boxed in on all sides would
     // otherwise never leave the loop.
     for _ in 0..64 {
-        let s = state!(a, RandomCrawler);
+        let s = state!(a, Machine(State::RandomCrawler));
         let dir = match s.heading {
             0 => Dir::Up,
             1 => Dir::Down,
@@ -794,7 +767,7 @@ pub(super) fn random_crawler(a: &mut Actor, c: &mut Ctx) {
         } else {
             c.random.next_byte() & 1
         };
-        let s = state!(a, RandomCrawler);
+        let s = state!(a, Machine(State::RandomCrawler));
         s.heading = turn;
         s.time = u16::from(c.random.next_byte() & 0x1f) + 10;
     }
@@ -863,7 +836,7 @@ impl Prisoner {
 }
 
 pub(super) fn aggressive_prisoner(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, Prisoner);
+    let s = state!(a, Machine(State::Prisoner));
     if s.phase == PrisonerPhase::Dying {
         s.dying += 1;
         if s.dying & 2 != 0 {
@@ -895,7 +868,7 @@ pub(super) fn aggressive_prisoner(a: &mut Actor, c: &mut Ctx) {
 
 /// Shot, a prisoner dies at once and flies back.
 pub(super) fn prisoner_hit(a: &mut Actor, c: &mut Ctx) {
-    let s = state!(a, Prisoner);
+    let s = state!(a, Machine(State::Prisoner));
     if s.phase == PrisonerPhase::Dying {
         return;
     }
@@ -917,7 +890,7 @@ pub(super) fn prisoner_hit(a: &mut Actor, c: &mut Ctx) {
 
 /// Touching the arm that reaches out hurts.
 pub(super) fn prisoner_touch(a: &mut Actor, c: &mut Ctx) {
-    if state!(a, Prisoner).phase == PrisonerPhase::Reaching {
+    if state!(a, Machine(State::Prisoner)).phase == PrisonerPhase::Reaching {
         c.hurt_player();
     }
 }

@@ -10,7 +10,7 @@ use crate::draw::SpriteLook;
 use crate::effects::{BLAST, Motion};
 use crate::map::{Dir, Hit};
 use crate::particles::Spread;
-use crate::player::{Facing, PlayerState};
+use crate::player::PlayerState;
 use crate::{Buttons, Sound};
 
 /// Sprites of the family (they are also the types).
@@ -36,9 +36,9 @@ const SHELL_BITS_LEFT: u16 = 0xc0;
 const SHELL_BITS_RIGHT: u16 = 0xc4;
 /// The steam of a turkey that was shot.
 const STEAM: u16 = 0x54;
-const FLOAT_100: u16 = 0x7b;
 
-/// Walk cycle of the fast walker, the ceiling dropper and the flyers.
+/// Walk cycle of the fast walker, the patrol walker, the ceiling dropper and
+/// the flyers.
 const WALK_CYCLE: [u16; 4] = [0, 1, 2, 1];
 
 /// The state of each update function of the family.
@@ -227,25 +227,9 @@ pub(super) fn touch(a: &mut Actor, c: &mut Ctx) -> bool {
     if cooked {
         contact::heal(c, 1);
     }
-    contact::sparkle(c, FLOAT_100, a.x, a.y);
+    contact::sparkle(c, contact::SPARKLE_100, a.x, a.y);
     c.remove(a);
     true
-}
-
-/// Whether the horizontal distance between the middle of the actor's sprite and
-/// the player is at most `dist`.
-fn player_near_x(c: &Ctx, a: &Actor, dist: i32) -> bool {
-    let width = c
-        .sprites
-        .frame_box(a.id, a.frame)
-        .map_or(0, |f| i32::from(f.width));
-    let at = c.player.x
-        + if c.player.facing == Facing::Left {
-            2
-        } else {
-            1
-        };
-    (a.x + (width >> 1) - at).abs() <= dist
 }
 
 /// Steps one tile sideways; true if that was blocked (the actor is back
@@ -253,12 +237,6 @@ fn player_near_x(c: &Ctx, a: &Actor, dist: i32) -> bool {
 fn step_side(a: &mut Actor, c: &Ctx, right: bool) -> bool {
     a.x += if right { 1 } else { -1 };
     c.move_blocked(a, if right { Dir::Right } else { Dir::Left })
-}
-
-fn sound_if_visible(a: &Actor, c: &mut Ctx, sound: Sound) {
-    if c.on_screen(a.placed()) {
-        c.sound(sound);
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -288,6 +266,11 @@ pub struct Hoverbot {
     delay: u8,
 }
 
+/// Draws the hoverbot's head (6 to 11) over its body.
+fn draw_head(a: &Actor, c: &mut Ctx, head: u8) {
+    c.draw_at(HOVERBOT, u16::from(head) + 6, a);
+}
+
 fn hoverbot(a: &mut Actor, c: &mut Ctx, s: &mut Hoverbot) {
     if s.delay == 0 {
         if s.beam < 10 && s.beam > 1 {
@@ -303,8 +286,7 @@ fn hoverbot(a: &mut Actor, c: &mut Ctx, s: &mut Hoverbot) {
         }
     } else {
         s.delay -= 1;
-        let head = u16::from(s.head) + 6;
-        c.draw(HOVERBOT, head, a.x, a.y, SpriteLook::Normal);
+        draw_head(a, c, s.head);
     }
     a.frame += 1;
     if a.frame == 6 {
@@ -346,8 +328,7 @@ fn hoverbot(a: &mut Actor, c: &mut Ctx, s: &mut Hoverbot) {
             s.right = true;
         }
     }
-    let head = u16::from(s.head) + 6;
-    c.draw(HOVERBOT, head, a.x, a.y, SpriteLook::Normal);
+    draw_head(a, c, s.head);
 }
 
 // ---------------------------------------------------------------------
@@ -415,7 +396,7 @@ fn watchbot(a: &mut Actor, c: &mut Ctx, s: &mut Watchbot) {
         s.hop = 0;
         a.flags.remove(ActorFlags::GRAVITY);
         s.idle = 0;
-        sound_if_visible(a, c, Sound::Jump);
+        c.sound_if_visible(a, Sound::Jump);
     }
     a.frame = WATCHBOT_IDLE[usize::from(s.idle & 3)];
     s.idle += 1;
@@ -654,7 +635,7 @@ fn soldier(a: &mut Actor, c: &mut Ctx, s: &mut Soldier) {
     }
     loop {
         if s.sleeping {
-            if a.y != c.player.y || !player_near_x(c, a, 6) {
+            if a.y != c.player.y || !c.near_x(a, 6) {
                 let shift = c.random.next_byte() & 4;
                 a.frame = (u16::from(c.draw_page) >> shift) + 0xc;
                 return;
@@ -716,7 +697,7 @@ fn enemy_laser_shot(a: &mut Actor, c: &mut Ctx, s: &mut LaserShot) {
             } else {
                 LASER_FLASH_LEFT
             };
-            c.draw(flash, 0, a.x, a.y, SpriteLook::Normal);
+            c.draw_at(flash, 0, a);
             c.sound(Sound::EnemyLaser);
         }
         let dir = if s.right { Dir::Right } else { Dir::Left };
@@ -931,9 +912,6 @@ fn turkey(a: &mut Actor, c: &mut Ctx, s: &mut Turkey) {
 // ---------------------------------------------------------------------
 // Patrol walker
 
-/// Frame offsets of the patrol walker's walk cycle.
-const PATROL_WALK: [u16; 4] = [0, 1, 2, 1];
-
 /// Type 176 walks and turns at walls and ledges; it starts towards the player.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PatrolWalker {
@@ -951,7 +929,7 @@ fn patrol_walker(a: &mut Actor, c: &mut Ctx, s: &mut PatrolWalker) {
         s.right = !s.right;
     }
     s.steps = s.steps.wrapping_add(1);
-    a.frame = if s.right { 3 } else { 0 } + PATROL_WALK[usize::from(s.steps & 3)];
+    a.frame = if s.right { 3 } else { 0 } + WALK_CYCLE[usize::from(s.steps & 3)];
 }
 
 // ---------------------------------------------------------------------

@@ -96,93 +96,100 @@ pub enum Flight {
     Rise,
 }
 
+/// The first boss's state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Episode1 {
+    mode: Mode1,
+    /// Hovering: flying right.
+    right: bool,
+    /// Drops made (while dropping) or hover frames.
+    count: u16,
+    /// Its height when the fight started.
+    home_y: i32,
+    death: u16,
+}
+
+/// The path flyer's state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathFlyer {
+    flight: Flight,
+    /// Position in the path.
+    at: usize,
+    /// Frames left to stand still. While this is 2 or more the boss does not
+    /// hurt the player (the original's contact test reads it as a death flag
+    /// too).
+    pause: u16,
+    laps: u16,
+    /// 1 is the frame the boss was killed, which only starts it.
+    death: u16,
+}
+
+/// The mine layer's state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MineLayer {
+    started: bool,
+    /// Frames, for the animation.
+    anim: u16,
+    /// Steps taken since it last stood still.
+    steps: u16,
+    /// Frames of walking since the last drone.
+    timer: u16,
+    /// Frames to wait after releasing a drone.
+    cooldown: u16,
+    death: u16,
+}
+
 /// The state of each update function of the family. `death` is 0 while the
 /// boss lives; the hit code sets it when the boss runs out of health, and
 /// `death_sequence` counts it on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {
-    Episode1 {
-        mode: Mode1,
-        /// Hovering: flying right.
-        right: bool,
-        /// Drops made (while dropping) or hover frames.
-        count: u16,
-        /// Its height when the fight started.
-        home_y: i32,
-        death: u16,
-    },
-    PathFlyer {
-        flight: Flight,
-        /// Position in the path.
-        at: usize,
-        /// Frames left to stand still. While this is 2 or more the boss
-        /// does not hurt the player (the original's contact test reads it
-        /// as a death flag too).
-        pause: u16,
-        laps: u16,
-        /// 1 is the frame the boss was killed, which only starts it.
-        death: u16,
-    },
-    Rocket {
-        started: bool,
-        death: u16,
-    },
-    MineLayer {
-        started: bool,
-        /// Frames, for the animation.
-        anim: u16,
-        /// Steps taken since it last stood still.
-        steps: u16,
-        /// Frames of walking since the last drone.
-        timer: u16,
-        /// Frames to wait after releasing a drone.
-        cooldown: u16,
-        death: u16,
-    },
+    Episode1(Episode1),
+    PathFlyer(PathFlyer),
+    Rocket { started: bool, death: u16 },
+    MineLayer(MineLayer),
 }
 
 impl State {
     fn death(&mut self) -> &mut u16 {
         match self {
-            Self::Episode1 { death, .. }
-            | Self::PathFlyer { death, .. }
-            | Self::Rocket { death, .. }
-            | Self::MineLayer { death, .. } => death,
+            Self::Episode1(s) => &mut s.death,
+            Self::PathFlyer(s) => &mut s.death,
+            Self::Rocket { death, .. } => death,
+            Self::MineLayer(s) => &mut s.death,
         }
     }
 }
 
-/// The starting state for `update` (from the spawn data's `vars`), if it
-/// belongs to this family.
-pub(super) fn new(update: Update, vars: [u16; 5]) -> Option<State> {
-    let _ = vars;
+/// The starting state for `update`, if it belongs to this family.
+pub(super) fn new(update: Update) -> Option<State> {
     Some(match update {
-        Update::BossEpisode1 => State::Episode1 {
+        Update::BossEpisode1 => State::Episode1(Episode1 {
             mode: Mode1::Start,
             right: false,
             count: 0,
             home_y: 0,
             death: 0,
-        },
-        Update::BossPathFlyer => State::PathFlyer {
+        }),
+        Update::BossPathFlyer => State::PathFlyer(PathFlyer {
             flight: Flight::Wait,
             at: 0,
             pause: 0,
             laps: 0,
             death: 0,
-        },
+        }),
         Update::BossRocket => State::Rocket {
             started: false,
             death: 0,
         },
-        Update::BossMineLayer => State::MineLayer {
+        Update::BossMineLayer => State::MineLayer(MineLayer {
             started: false,
             anim: 0,
             steps: 0,
             timer: 0,
             cooldown: 0,
             death: 0,
-        },
+        }),
         _ => return None,
     })
 }
@@ -254,29 +261,10 @@ pub(super) fn update(a: &mut Actor, c: &mut Ctx) {
         return;
     };
     match &mut s {
-        State::Episode1 {
-            mode,
-            right,
-            count,
-            home_y,
-            death,
-        } => episode1(a, c, mode, right, count, home_y, death),
-        State::PathFlyer {
-            flight,
-            at,
-            pause,
-            laps,
-            death,
-        } => path_flyer(a, c, flight, at, pause, laps, death),
+        State::Episode1(s) => episode1(a, c, s),
+        State::PathFlyer(s) => path_flyer(a, c, s),
         State::Rocket { started, death } => rocket(a, c, started, death),
-        State::MineLayer {
-            started,
-            anim,
-            steps,
-            timer,
-            cooldown,
-            death,
-        } => mine_layer(a, c, started, anim, steps, timer, cooldown, death),
+        State::MineLayer(s) => mine_layer(a, c, s),
     }
     a.kind = Kind::Boss(s);
 }
@@ -285,15 +273,14 @@ pub(super) fn update(a: &mut Actor, c: &mut Ctx) {
 /// right, leaving bombs on the way; after a second drop it hovers, bobbing to
 /// and fro, until the player is under it for the next drop. Its own frames are
 /// 2 (alive) and 3 (dead, blinking); frame 0 and 1 of the actor itself flicker.
-fn episode1(
-    a: &mut Actor,
-    c: &mut Ctx,
-    mode: &mut Mode1,
-    right: &mut bool,
-    count: &mut u16,
-    home_y: &mut i32,
-    death: &mut u16,
-) {
+fn episode1(a: &mut Actor, c: &mut Ctx, s: &mut Episode1) {
+    let Episode1 {
+        mode,
+        right,
+        count,
+        home_y,
+        death,
+    } = s;
     const ID: u16 = BOSS_EPISODE_1;
     a.frame = u16::from(c.draw_page);
     if *death == 0 {
@@ -401,7 +388,7 @@ fn episode1(
         3
     };
     if draw {
-        c.draw(ID, frame, a.x, a.y, SpriteLook::Normal);
+        c.draw_at(ID, frame, a);
     }
 }
 
@@ -409,15 +396,14 @@ fn episode1(
 /// eight laps of the short path out and back and rises to its resting height,
 /// which is the actor's `score` (set to its row at the start; being killed also
 /// scores that).
-fn path_flyer(
-    a: &mut Actor,
-    c: &mut Ctx,
-    flight: &mut Flight,
-    at: &mut usize,
-    pause: &mut u16,
-    laps: &mut u16,
-    death: &mut u16,
-) {
+fn path_flyer(a: &mut Actor, c: &mut Ctx, s: &mut PathFlyer) {
+    let PathFlyer {
+        flight,
+        at,
+        pause,
+        laps,
+        death,
+    } = s;
     let page = u16::from(c.draw_page);
     // A path frame of 0 stands for the flickering pair.
     let frame = |f: i8| if f == 0 { page } else { f as u16 };
@@ -453,8 +439,7 @@ fn path_flyer(
             start_fight(c);
         }
         Flight::Out => {
-            let (dx, dy, f) = step(&LONG_PATH, *at);
-            (a.x, a.y, a.frame) = (a.x + dx, a.y + dy, f);
+            fly(a, step(&LONG_PATH, *at), false);
             *at += 3;
             if *at != LONG_END {
                 return;
@@ -465,8 +450,7 @@ fn path_flyer(
         }
         Flight::Back => {
             *at -= 3;
-            let (dx, dy, f) = step(&LONG_PATH, *at);
-            (a.x, a.y, a.frame) = (a.x - dx, a.y - dy, f);
+            fly(a, step(&LONG_PATH, *at), true);
             if *at != 0 {
                 return;
             }
@@ -488,8 +472,7 @@ fn path_flyer(
             return;
         }
         Flight::ShortOut => {
-            let (dx, dy, f) = step(&SHORT_PATH, *at);
-            (a.x, a.y, a.frame) = (a.x + dx, a.y + dy, f);
+            fly(a, step(&SHORT_PATH, *at), false);
             *at += 3;
             if *at == SHORT_LAP {
                 *laps += 1;
@@ -505,8 +488,7 @@ fn path_flyer(
         }
         Flight::ShortBack => {
             *at -= 3;
-            let (dx, dy, f) = step(&SHORT_PATH, *at);
-            (a.x, a.y, a.frame) = (a.x - dx, a.y - dy, f);
+            fly(a, step(&SHORT_PATH, *at), true);
             if *at == 0 {
                 *laps += 1;
                 *at = SHORT_LAP;
@@ -527,6 +509,13 @@ fn path_flyer(
         }
     }
     *at = 0;
+}
+
+/// Moves the path flyer one step of a path (back along it with `back`) and
+/// sets its frame.
+fn fly(a: &mut Actor, step: (i32, i32, u16), back: bool) {
+    let sign = if back { -1 } else { 1 };
+    (a.x, a.y, a.frame) = (a.x + sign * step.0, a.y + sign * step.1, step.2);
 }
 
 /// A step in x towards `tx - 4` on half of the frames (at random), in y towards
@@ -553,13 +542,7 @@ fn rocket(a: &mut Actor, c: &mut Ctx, started: &mut bool, death: &mut u16) {
     }
     let (px, py) = (c.player.x, c.player.y);
     move_toward_jittery(a, c, px + 3, py - 1);
-    c.draw(
-        BOSS_ROCKET,
-        u16::from(c.draw_page) + 1,
-        a.x,
-        a.y,
-        SpriteLook::Normal,
-    );
+    c.draw_at(BOSS_ROCKET, u16::from(c.draw_page) + 1, a);
     if !c.on_screen(a.placed()) || !c.draw_page {
         return;
     }
@@ -583,17 +566,15 @@ fn rocket(a: &mut Actor, c: &mut Ctx, started: &mut bool, death: &mut u16) {
 
 /// Follows the player, and after walking a while releases a homing drone, then
 /// waits 12 frames.
-#[allow(clippy::too_many_arguments)]
-fn mine_layer(
-    a: &mut Actor,
-    c: &mut Ctx,
-    started: &mut bool,
-    anim: &mut u16,
-    steps: &mut u16,
-    timer: &mut u16,
-    cooldown: &mut u16,
-    death: &mut u16,
-) {
+fn mine_layer(a: &mut Actor, c: &mut Ctx, s: &mut MineLayer) {
+    let MineLayer {
+        started,
+        anim,
+        steps,
+        timer,
+        cooldown,
+        death,
+    } = s;
     if !*started {
         *started = true;
         start_fight(c);
@@ -622,13 +603,7 @@ fn mine_layer(
             *steps += 1;
         }
     }
-    c.draw(
-        BOSS_MINE_LAYER,
-        (*anim & 3) + 1,
-        a.x,
-        a.y,
-        SpriteLook::Normal,
-    );
+    c.draw_at(BOSS_MINE_LAYER, (*anim & 3) + 1, a);
     if *cooldown == 0 {
         if *steps != 0 {
             *timer += 1;
@@ -669,12 +644,12 @@ pub(super) fn touch(a: &mut Actor, c: &mut Ctx) -> bool {
         return false;
     };
     let hurts = match s {
-        State::Episode1 { death, .. }
+        State::Episode1(Episode1 { death, .. })
         | State::Rocket { death, .. }
-        | State::MineLayer { death, .. } => *death < 2,
+        | State::MineLayer(MineLayer { death, .. }) => *death < 2,
         // The original tests the pause here, which doubles as its death
         // counter.
-        State::PathFlyer { pause, death, .. } => *death < 2 && *pause < 2,
+        State::PathFlyer(PathFlyer { pause, death, .. }) => *death < 2 && *pause < 2,
     };
     if hurts {
         c.hurt_player();
@@ -701,7 +676,7 @@ mod tests {
             (Update::BossRocket, 265),
             (Update::BossMineLayer, 279),
         ] {
-            assert!(new(update, [0; 5]).is_some());
+            assert!(new(update).is_some());
             assert_eq!(
                 crate::actors::spawn::lookup(level_type).unwrap().update,
                 update

@@ -3,12 +3,11 @@
 
 use dn2_assets::level::LevelFlags;
 
-use super::{Actor, ActorFlags, Ctx, Kind, Update};
+use super::{Actor, ActorFlags, Ctx, FIRE, Kind, Update};
 use crate::draw::Placed;
 use crate::effects::{BLAST, EXPLOSION_START, Motion};
 use crate::map::{Dir, Hit};
 use crate::particles::Spread;
-use crate::player::Facing;
 use crate::shots::{self, REACTOR_BLASTS, ShotDirection, ShotKind, ShotRequest};
 use crate::{Sound, SpriteLook};
 
@@ -32,7 +31,6 @@ const SLIME_BLOB: u16 = 67;
 const SLIME_CONTAINER: u16 = 68;
 
 /// Effects.
-const FLAME: u16 = 0x2b;
 const CARRIER_BLAST_AREA: u16 = CARRIER;
 const CONTAINER_HALF_LEFT: u16 = 0x3c;
 const CONTAINER_HALF_RIGHT: u16 = 0x3d;
@@ -102,10 +100,8 @@ pub enum State {
     },
 }
 
-/// The starting state for `update` (from the spawn data's `vars`), if it
-/// belongs to this family.
-pub(super) fn new(update: Update, vars: [u16; 5]) -> Option<State> {
-    let _ = vars;
+/// The starting state for `update`, if it belongs to this family.
+pub(super) fn new(update: Update) -> Option<State> {
     Some(match update {
         Update::RocketTurret => State::RocketTurret { timer: 0 },
         Update::EnemyRocket => State::EnemyRocket { age: 0 },
@@ -130,28 +126,6 @@ pub(super) fn new(update: Update, vars: [u16; 5]) -> Option<State> {
 /// sprite is the one of `id`, not necessarily the actor's.
 pub(super) fn blocked(c: &Ctx, id: u16, x: i32, y: i32, dir: Dir) -> bool {
     c.collide(id, 0, x, y, dir) != Hit::Free
-}
-
-fn sound_if_visible(a: &Actor, c: &mut Ctx, sound: Sound) {
-    if c.on_screen(a.placed()) {
-        c.sound(sound);
-    }
-}
-
-/// Whether the middle of the actor's sprite is at most `dist` tiles from the
-/// player horizontally.
-fn player_near_x(a: &Actor, c: &Ctx, dist: i32) -> bool {
-    let width = c
-        .sprites
-        .frame_box(a.id, a.frame)
-        .map_or(0, |f| i32::from(f.width));
-    let player = c.player.x
-        + if c.player.facing == Facing::Left {
-            2
-        } else {
-            1
-        };
-    (a.x + (width >> 1) - player).abs() <= dist
 }
 
 /// The actor's update function.
@@ -233,13 +207,7 @@ fn enemy_rocket(a: &mut Actor, c: &mut Ctx, age: &mut u16) {
     if dx != 0 || dy != 0 {
         a.x += dx;
         a.y += dy;
-        c.draw(
-            a.id,
-            u16::from(c.draw_page) + 1,
-            a.x,
-            a.y,
-            SpriteLook::Normal,
-        );
+        c.draw_at(a.id, u16::from(c.draw_page) + 1, a);
         if c.move_blocked(a, dir) {
             c.remove(a);
         }
@@ -257,7 +225,7 @@ fn enemy_rocket(a: &mut Actor, c: &mut Ctx, age: &mut u16) {
 fn carrier(a: &mut Actor, c: &mut Ctx, timer: &mut u16, released: &mut bool) {
     if *timer == 0 {
         a.frame = 0;
-        let mut done = player_near_x(a, c, 5);
+        let mut done = c.near_x(a, 5);
         if !done {
             let px = c.player.x;
             done = if px < a.x {
@@ -350,13 +318,7 @@ fn bomber(a: &mut Actor, c: &mut Ctx, timer: &mut u16) {
     if *timer < BOMBER_DROPS {
         c.draw(BOMB, 0, a.x + 2, a.y, SpriteLook::Normal);
     }
-    c.draw(
-        BOMBER,
-        u16::from(c.draw_page) + 1,
-        a.x,
-        a.y,
-        SpriteLook::Normal,
-    );
+    c.draw_at(BOMBER, u16::from(c.draw_page) + 1, a);
 }
 
 /// Falls with the actor loop's gravity and explodes on landing; the bomb also
@@ -367,13 +329,13 @@ fn bomb(a: &mut Actor, c: &mut Ctx) {
     } else if a.fall == 0 {
         c.remove(a);
         c.sound(Sound::BigExplosion);
-        c.effect(FLAME, a.x, a.y, Motion::Still, 0);
+        c.effect(FIRE, a.x, a.y, Motion::Still, 0);
         c.state.flash = Some(1);
         if a.id != TRAIL_BOMB {
             for n in [4, 8, 12, 16] {
                 let delay = (n / 2) as u16;
-                c.effect(FLAME, a.x - n, a.y + 2, Motion::Still, delay);
-                c.effect(FLAME, a.x + n, a.y + 2, Motion::Still, delay);
+                c.effect(FIRE, a.x - n, a.y + 2, Motion::Still, delay);
+                c.effect(FIRE, a.x + n, a.y + 2, Motion::Still, delay);
             }
         }
     }
@@ -401,13 +363,13 @@ fn bouncing_ball(a: &mut Actor, c: &mut Ctx, roll: &mut Roll, jump: &mut u16) {
         a.y -= 1;
         if c.move_blocked(a, Dir::Up) {
             *jump = 5;
-            sound_if_visible(a, c, Sound::Jump);
+            c.sound_if_visible(a, Sound::Jump);
         }
         if *jump < 2 {
             a.y -= 1;
             if c.move_blocked(a, Dir::Up) {
                 *jump = 5;
-                sound_if_visible(a, c, Sound::Jump);
+                c.sound_if_visible(a, Sound::Jump);
             }
         }
         *jump += 1;
@@ -421,7 +383,7 @@ fn bouncing_ball(a: &mut Actor, c: &mut Ctx, roll: &mut Roll, jump: &mut u16) {
         if a.fall == 0 && *jump == 8 {
             *jump = 0;
             a.flags.remove(ActorFlags::GRAVITY);
-            sound_if_visible(a, c, Sound::Jump);
+            c.sound_if_visible(a, Sound::Jump);
         }
     } else {
         *jump += 1;
@@ -431,12 +393,12 @@ fn bouncing_ball(a: &mut Actor, c: &mut Ctx, roll: &mut Roll, jump: &mut u16) {
 /// A glass tube of slime. Once shot it breaks over 7 frames and lets a slime
 /// blob out.
 fn slime_container(a: &mut Actor, c: &mut Ctx, breaking: &mut u16) {
-    c.draw(SLIME_CONTAINER, 8, a.x, a.y, SpriteLook::Normal);
+    c.draw_at(SLIME_CONTAINER, 8, a);
     if a.frame == 7 {
         return;
     }
     if *breaking == 0 || a.frame > 6 {
-        c.draw(SLIME_CONTAINER, 2, a.x, a.y, SpriteLook::Normal);
+        c.draw_at(SLIME_CONTAINER, 2, a);
         a.frame = u16::from(c.random.next_byte() & 1);
     } else {
         *breaking += 1;
@@ -532,10 +494,7 @@ pub(super) fn touch(a: &mut Actor, c: &mut Ctx) -> bool {
         return false;
     }
     // Kills even a player who is almost dead and cannot be hurt.
-    c.player.health = 1;
-    c.player.hurt_timer = 0;
-    c.player.cloak_timer = 0;
-    c.hurt_player();
+    c.kill_player();
     true
 }
 
@@ -556,13 +515,13 @@ mod tests {
     #[test]
     fn ball_starts_still() {
         assert_eq!(
-            new(Update::BouncingBall, [0; 5]),
+            new(Update::BouncingBall),
             Some(State::BouncingBall {
                 roll: Roll::Still,
                 jump: 0
             })
         );
-        assert_eq!(new(Update::Hoverbot, [0; 5]), None);
+        assert_eq!(new(Update::Hoverbot), None);
     }
 
     #[test]

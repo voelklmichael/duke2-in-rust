@@ -1,7 +1,9 @@
 //! Actors touching the player: enemies hurt, items are picked up. The original
 //! switches on the actor's type once the two sprites overlap.
 
-use super::items::{BIG_HEALTH, CLOAK, HEALTH, RAPID_FIRE, SODA, Stage};
+use super::items::{
+    BIG_HEALTH, CLOAK, CLOAK_ITEM, HEALTH, HINT_GLOBE, RAPID_FIRE, RAPID_FIRE_ITEM, SODA, Stage,
+};
 use super::{Actor, Ctx, Kind};
 use crate::effects::Motion;
 use dn2_assets::level::LevelFlags;
@@ -12,16 +14,13 @@ use crate::state::LevelExit;
 use crate::{Buttons, Sound};
 
 /// Score numbers that float up where something was picked up.
-const SPARKLE_100: u16 = 0x7b;
-const SPARKLE_500: u16 = 0x7c;
-const SPARKLE_2000: u16 = 0x7d;
-const SPARKLE_5000: u16 = 0x7e;
-const FIREWORK: u16 = 0x7f;
+pub(super) const SPARKLE_100: u16 = 0x7b;
+pub(super) const SPARKLE_500: u16 = 0x7c;
+pub(super) const SPARKLE_2000: u16 = 0x7d;
+pub(super) const SPARKLE_5000: u16 = 0x7e;
+pub(super) const FIREWORK: u16 = 0x7f;
 /// Frames of cloak and rapid fire.
 const POWER_UP_FRAMES: u16 = 700;
-/// Inventory items of cloak and rapid fire (their icons' sprites).
-const CLOAK_ITEM: u16 = 0xd3;
-const RAPID_FIRE_ITEM: u16 = 0x34;
 const MAX_HEALTH: u8 = 9;
 
 /// Calls the contact reaction of `a` if it overlaps the player.
@@ -87,8 +86,24 @@ fn letter(a: &mut Actor, c: &mut Ctx, order: u16, message: (u8, &'static str)) {
 /// The transporter's two pads (type 50 and 51, both sprite 51), and the
 /// sound of using one.
 const TRANSPORTER: u16 = 51;
-/// The crystal globe the hint pedestal wants.
-const HINT_GLOBE: u16 = 0xee;
+
+/// Bonus items: their points, and the score numbers that float up from them
+/// (sprite, and the rows above the item).
+fn bonus_item(id: u16) -> Option<(u16, &'static [(u16, i32)])> {
+    Some(match id {
+        172 => (100, &[(SPARKLE_100, 0)]),
+        184 => (2500, &[(SPARKLE_2000, -1), (SPARKLE_500, 0)]),
+        173 => (2000, &[(SPARKLE_2000, 0)]),
+        183 => (
+            1500,
+            &[(SPARKLE_500, 0), (SPARKLE_500, -1), (SPARKLE_500, -2)],
+        ),
+        181 => (1000, &[(SPARKLE_500, 0), (SPARKLE_500, -1)]),
+        274 => (5000, &[(SPARKLE_5000, -2)]),
+        160 | 182 | 185 | 186 | 275 => (500, &[(SPARKLE_500, 0)]),
+        _ => return None,
+    })
+}
 
 /// Standing on a transporter pad, up sends the player to the other pad
 /// (the level ends if there is none). A level with the backdrop switch
@@ -144,6 +159,13 @@ fn react(a: &mut Actor, c: &mut Ctx) {
         return;
     }
     let (x, y) = (a.x, a.y);
+    if let Some((points, sparkles)) = bonus_item(a.id) {
+        bonus(a, c, points);
+        for &(id, dy) in sparkles {
+            sparkle(c, id, x, y + dy);
+        }
+        return;
+    }
     match a.id {
         // Plain enemies and hazards hurt.
         0 | 31 | 32 | 38 | 39 | 49 | 54 | 58 | 63 | 64 | 67 | 70 | 97 | 118 | 134 | 151 | 159
@@ -161,14 +183,14 @@ fn react(a: &mut Actor, c: &mut Ctx) {
             if !ready(a) {
                 return;
             }
-            let (id, message) = match a.id {
-                19 => (once::ROCKET_LAUNCHER, text::ROCKET_LAUNCHER),
-                20 => (once::FLAME_THROWER, text::FLAME_THROWER),
-                22 => (once::REGULAR_WEAPON, text::REGULAR_WEAPON),
-                _ => (once::LASER, text::LASER),
+            let (id, message, ammo) = match a.id {
+                19 => (once::ROCKET_LAUNCHER, text::ROCKET_LAUNCHER, 0x20),
+                20 => (once::FLAME_THROWER, text::FLAME_THROWER, 0x40),
+                22 => (once::REGULAR_WEAPON, text::REGULAR_WEAPON, 0x20),
+                _ => (once::LASER, text::LASER, 0x20),
             };
             c.state.messages.show_once(id, message);
-            c.player.ammo = if a.id == 20 { 0x40 } else { 0x20 };
+            c.player.ammo = ammo;
             c.state.tally.weapons_collected += 1;
             if let Kind::ItemBox(s) = &a.kind {
                 c.player.weapon = match s.weapon {
@@ -182,40 +204,6 @@ fn react(a: &mut Actor, c: &mut Ctx) {
             c.remove(a);
             sparkle(c, SPARKLE_2000, x, y);
             c.add_score(2000);
-        }
-        // Bonus items.
-        172 => {
-            bonus(a, c, 100);
-            sparkle(c, SPARKLE_100, x, y);
-        }
-        184 => {
-            bonus(a, c, 2500);
-            sparkle(c, SPARKLE_2000, x, y - 1);
-            sparkle(c, SPARKLE_500, x, y);
-        }
-        173 => {
-            bonus(a, c, 2000);
-            sparkle(c, SPARKLE_2000, x, y);
-        }
-        183 => {
-            bonus(a, c, 1500);
-            for up in 0..3 {
-                sparkle(c, SPARKLE_500, x, y - up);
-            }
-        }
-        181 => {
-            bonus(a, c, 1000);
-            for up in 0..2 {
-                sparkle(c, SPARKLE_500, x, y - up);
-            }
-        }
-        274 => {
-            bonus(a, c, 5000);
-            sparkle(c, SPARKLE_5000, x, y - 2);
-        }
-        160 | 182 | 185 | 186 | 275 => {
-            bonus(a, c, 500);
-            sparkle(c, SPARKLE_500, x, y);
         }
         SODA => {
             c.remove(a);
