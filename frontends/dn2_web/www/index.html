@@ -148,9 +148,11 @@
 <script type="module">
   // The browser may keep scripts and the wasm cached across builds, so each build
   // is asked for by its version (version.txt, written by build.sh), which is always
-  // checked with the server.
-  const version = await fetch('version.txt', { cache: 'no-cache' })
-    .then((response) => response.ok ? response.text() : '', () => '');
+  // checked with the server. Its second line is the build time, for the title.
+  const [version = '', built] = await fetch('version.txt', { cache: 'no-cache' })
+    .then((response) => response.ok ? response.text() : '', () => '')
+    .then((text) => text.trim().split('\n'));
+  if (built) document.title = `Duke Nukem II (rust build ${built.trim()})`;
   await import(`./main.js?v=${encodeURIComponent(version.trim())}`);
 </script>
 </body>
