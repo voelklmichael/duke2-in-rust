@@ -5,6 +5,8 @@
 // (`main.js?v=…`); the same version on the other files keeps the browser from
 // mixing in a cached older build.
 const VERSION = new URL(import.meta.url).search;
+/** The page's title, with the build time index.html put in it. */
+const TITLE = document.title;
 const { default: init, Game, data_files, tick_hz } = await import(`./pkg/dn2_web.js${VERSION}`);
 const { readZip } = await import(`./zip.js${VERSION}`);
 
@@ -259,7 +261,7 @@ function launch(state) {
   const { options } = state;
   $('status').hidden = true;
   $('launcher').hidden = false;
-  document.title = 'Duke Nukem II';
+  document.title = TITLE;
 
   const fields = [...document.querySelectorAll('#options [name], #options-game [name]')];
   for (const field of fields) {
