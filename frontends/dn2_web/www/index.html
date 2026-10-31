@@ -5,52 +5,140 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Duke Nukem II</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; color: #ccc;
-    font: 16px/1.4 system-ui, sans-serif; overflow: hidden; }
-  canvas { position: absolute; image-rendering: pixelated; outline: none; }
-  .panel { position: absolute; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 1em; padding: 16px;
-    text-align: center; }
-  .panel[hidden] { display: none; }
-  .drop { border: 2px dashed #555; border-radius: 8px; padding: 2em; max-width: 32em; }
-  .drop.over { border-color: #ccc; }
-  button, label.button { background: #333; color: #eee; border: 1px solid #666;
-    border-radius: 4px; padding: .4em 1em; font: inherit; cursor: pointer; }
+  html, body { margin: 0; min-height: 100%; background: #000; color: #ccc;
+    font: 16px/1.4 system-ui, sans-serif; }
+  body.playing { overflow: hidden; }
+  canvas { position: fixed; image-rendering: pixelated; outline: none; }
+  .panel { position: fixed; inset: 0; display: flex; align-items: center;
+    justify-content: center; padding: 16px; text-align: center; }
+  [hidden] { display: none !important; }
+  #launcher { max-width: 40em; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 .2em; font-size: 28px; color: #fc3; letter-spacing: .05em; }
+  h2 { margin: 1.4em 0 .5em; font-size: 15px; text-transform: uppercase;
+    letter-spacing: .08em; color: #888; }
+  .drop { border: 2px dashed #555; border-radius: 8px; padding: 1.2em; text-align: center; }
+  body.over .drop { border-color: #fc3; background: #1a1500; }
+  .files { display: grid; grid-template-columns: auto 1fr auto; gap: .4em .8em;
+    align-items: center; margin-top: 1em; }
+  .ok { color: #8d8; } .missing { color: #888; }
+  .options { display: grid; grid-template-columns: max-content 1fr; gap: .6em 1em;
+    align-items: center; }
+  .options .hint { grid-column: 2; margin-top: -.5em; }
+  @media (max-width: 480px) {
+    .options { grid-template-columns: 1fr; }
+    .options .hint { grid-column: 1; }
+  }
+  button, label.button, select, input[type=text] { background: #222; color: #eee;
+    border: 1px solid #666; border-radius: 4px; padding: .35em .8em; font: inherit; }
+  button, label.button { cursor: pointer; display: inline-block; }
+  button:hover, label.button:hover { border-color: #aaa; }
+  button.small { padding: .1em .6em; font-size: 13px; }
+  input[type=text] { width: 4em; }
   input[type=file] { display: none; }
+  #play { margin-top: 1.6em; font-size: 20px; padding: .5em 2.5em; background: #fc3;
+    color: #000; border: none; font-weight: 600; }
+  #play:disabled { background: #444; color: #888; cursor: default; }
   .error { color: #f88; }
-  .small { font-size: 13px; color: #888; }
+  .hint, .small { font-size: 13px; color: #888; }
+  code { color: #ddd; }
 </style>
 </head>
 <body>
 <canvas id="screen" tabindex="0" hidden></canvas>
 <div id="status" class="panel">Loading…</div>
-<div id="pick" class="panel" hidden>
-  <div class="drop" id="drop">
-    <p>Duke Nukem II needs its game files: choose the game folder, or drop
-      <code>NUKEM2.CMP</code> and <code>NUKEM2.F1</code> to <code>F5</code> here.
-      They stay in this browser.</p>
-    <p>
-      <label class="button">Choose folder<input id="pick-dir" type="file" webkitdirectory></label>
-      <label class="button">Choose files<input id="pick-files" type="file" multiple></label>
-    </p>
-    <p id="pick-error" class="error"></p>
-  </div>
-  <p class="small">Options in the address: <code>?wide</code>, <code>?filter=epx</code>,
-    <code>?scale=N</code>, <code>?mute</code>, <code>?play=L1</code>, <code>?viewer</code>,
-    <code>?pick</code> to choose the game files again, <code>?hd</code> for an HD pack,
-    <code>?pickhd</code> to choose it again.</p>
-</div>
-<div id="pick-hd" class="panel" hidden>
+
+<main id="launcher" hidden>
+  <h1>Duke Nukem II</h1>
+  <p class="small">The game files never leave your computer: they are unpacked and kept in this
+    browser only.</p>
+
+  <h2>Game files</h2>
   <div class="drop">
-    <p>Choose the folder of an HD pack: pictures named like <code>CZONE1.MNI/solid.png</code>,
-      <code>ACTORS.MNI/5/0.png</code>, <code>DROP1.MNI.png</code>. They stay in this browser.</p>
+    <p>Drop the game here as a <b>.zip</b>, its folder, or its files
+      (<code>NUKEM2.CMP</code> and <code>NUKEM2.F1</code> to <code>F5</code>).
+      Drop an HD pack (a zip or folder of PNGs) here as well.</p>
     <p>
-      <label class="button">Choose HD folder<input id="pick-hd-dir" type="file" webkitdirectory></label>
-      <button id="pick-hd-skip">Play without</button>
+      <label class="button">Choose zip or files<input id="pick-files" type="file" multiple accept=".zip,.cmp,.f1,.f2,.f3,.f4,.f5,.png"></label>
+      <label class="button">Choose folder<input id="pick-dir" type="file" webkitdirectory></label>
     </p>
-    <p id="pick-hd-error" class="error"></p>
+    <p id="drop-message" aria-live="polite"></p>
   </div>
-</div>
+  <div class="files">
+    <span>Game</span><span id="game-state" class="missing">not loaded</span>
+    <button id="forget-game" class="small">Forget</button>
+    <span>HD pack</span><span id="hd-state" class="missing">none (optional)</span>
+    <button id="forget-hd" class="small">Forget</button>
+  </div>
+
+  <h2>Picture</h2>
+  <form id="options" class="options" onsubmit="return false">
+    <label for="o-wide">Widescreen</label>
+    <label><input id="o-wide" name="wide" type="checkbox"> 16:9 view (424×200)</label>
+    <span class="hint">More of the level is visible; the game plays the same.</span>
+
+    <label for="o-filter">Upscaling</label>
+    <select id="o-filter" name="filter">
+      <option value="nearest">Pixels (nearest)</option>
+      <option value="epx">Smoothed edges (EPX)</option>
+    </select>
+
+    <label for="o-scale">Render scale</label>
+    <select id="o-scale" name="scale">
+      <option value="auto">Auto</option>
+      <option value="1">1×</option>
+      <option value="2">2×</option>
+      <option value="3">3×</option>
+      <option value="4">4×</option>
+    </select>
+    <span class="hint">Pixels per game pixel before fitting to the window. Auto: 1×, or 3× with EPX or
+      an HD pack. EPX works at 2× to 4×.</span>
+
+    <label for="o-hd">HD pictures</label>
+    <label><input id="o-hd" name="hd" type="checkbox"> Use the HD pack</label>
+
+    <label for="o-aspect">Aspect</label>
+    <select id="o-aspect" name="aspect">
+      <option value="tall">Original (tall pixels, 4:3)</option>
+      <option value="square">Square pixels</option>
+    </select>
+
+    <label for="o-integer">Integer scaling</label>
+    <label><input id="o-integer" name="integer" type="checkbox"> Only whole multiples (sharpest, may
+      leave borders)</label>
+
+    <label for="o-smooth">Stretching</label>
+    <label><input id="o-smooth" name="smooth" type="checkbox"> Blur when stretching (instead of
+      sharp pixels)</label>
+
+    <label for="o-fullscreen">Fullscreen</label>
+    <label><input id="o-fullscreen" name="fullscreen" type="checkbox"> Go fullscreen on start</label>
+  </form>
+
+  <h2>Game</h2>
+  <form id="options-game" class="options" onsubmit="return false">
+    <label for="o-mute">Sound</label>
+    <label><input id="o-mute" name="mute" type="checkbox"> Mute sound and music</label>
+
+    <label for="o-start">Start with</label>
+    <select id="o-start" name="start">
+      <option value="game">The game (intro and menus)</option>
+      <option value="play">Playing a level</option>
+      <option value="level">The level browser</option>
+      <option value="viewer">The asset viewer</option>
+    </select>
+
+    <label for="o-level" id="o-level-label">Level</label>
+    <input id="o-level" name="level" type="text" placeholder="L1" spellcheck="false">
+  </form>
+
+  <button id="play" disabled>Play</button>
+  <p id="play-error" class="error" aria-live="polite"></p>
+  <p class="small">Keys: arrows to move, Ctrl to jump, Alt to fire, Esc for the menu.
+    Quitting the game comes back here.
+    The address may carry the options too (<code>?wide&amp;filter=epx&amp;scale=3</code>);
+    <code>?go</code> starts right away.</p>
+</main>
+
 <script type="module" src="main.js"></script>
 </body>
 </html>
