@@ -157,7 +157,13 @@ function pictureKey(path) {
   return at < 0 ? null : parts.slice(at).join('/').slice(0, -4);
 }
 
-/** Sorts `items` (zips opened) into `{ game, pictures }` Maps of bytes. */
+/**
+ * Files that may hold others: zips, and the self-extracting programs of
+ * installers, e.g. the shareware's DN2.1.
+ */
+const ARCHIVES = /\.(zip|exe|\d)$/i;
+
+/** Sorts `items` (archives opened) into `{ game, pictures }` Maps of bytes. */
 async function sortFiles(items, progress) {
   const wanted = new Set(data_files());
   const game = new Map();
@@ -169,20 +175,25 @@ async function sortFiles(items, progress) {
       return;
     }
     const key = pictureKey(item.path);
-    if (key) pictures.set(key, await item.read());
-  };
-  for (const item of items) {
-    if (/\.zip$/i.test(item.path)) {
-      progress(`Unpacking ${item.path}…`);
+    if (key) {
+      pictures.set(key, await item.read());
+      return;
+    }
+    if (!ARCHIVES.test(name)) return;
+    progress(`Unpacking ${name}…`);
+    try {
       const entries = readZip((await item.read()).buffer);
       for (const [i, entry] of entries.entries()) {
-        if (i % 200 === 0 && entries.length > 400) progress(`Unpacking ${item.path}… ${i} of ${entries.length}`);
+        if (i % 200 === 0 && entries.length > 400) progress(`Unpacking ${name}… ${i} of ${entries.length}`);
         await take(entry);
       }
-    } else {
-      await take(item);
+    } catch (e) {
+      // Programs are mostly not self-extracting zips, and of no use then.
+      if (/\.zip$/i.test(name)) throw new Error(`${name}: ${e.message}`);
+      console.info(`${item.path}: ${e.message}`);
     }
-  }
+  };
+  for (const item of items) await take(item);
   return { game, pictures };
 }
 
