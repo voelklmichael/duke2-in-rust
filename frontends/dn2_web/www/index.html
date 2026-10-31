@@ -48,13 +48,13 @@
     background: rgba(255, 255, 255, .12); border: 2px solid rgba(255, 255, 255, .35);
     color: rgba(255, 255, 255, .8); font-weight: 600; box-sizing: border-box; }
   #touch .held { background: rgba(255, 204, 51, .45); }
-  #dpad { left: max(16px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom));
+  #dpad { left: max(16px, env(safe-area-inset-left)); top: 50%; transform: translateY(-50%);
     width: 150px; height: 150px; border-radius: 50%; }
   #dpad span { position: absolute; font-size: 22px; }
   #dpad .up { top: 6px; } #dpad .down { bottom: 6px; }
   #dpad .left { left: 12px; } #dpad .right { right: 12px; }
   .touch-actions { right: max(16px, env(safe-area-inset-right));
-    bottom: max(16px, env(safe-area-inset-bottom)); display: flex; align-items: flex-end; gap: 14px; }
+    top: 50%; transform: translateY(-50%); display: flex; align-items: flex-end; gap: 14px; }
   .touch-actions [data-key] { width: 76px; height: 76px; border-radius: 50%; }
   .touch-actions [data-key="AltLeft"] { margin-bottom: 50px; }
   .touch-keys { top: max(8px, env(safe-area-inset-top)); display: flex; gap: 8px; }
