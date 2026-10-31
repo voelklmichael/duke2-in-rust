@@ -55,8 +55,8 @@ impl Game {
     /// Loads the game. `files` maps file names to their bytes
     /// (`Uint8Array`); `pictures`, if given, maps the names of an HD pack's
     /// pictures (`CZONE1.MNI/solid`, without `.png`) to their PNG bytes;
-    /// `options` is the page's query string: `wide`, `filter=epx`,
-    /// `scale=N`, `play=L1`, `level=L1`, `viewer`.
+    /// `options` are the launcher's, as a query string: `wide`,
+    /// `filter=epx`, `scale=N`, `play=L1`, `level=L1`, `viewer`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         files: js_sys::Map,

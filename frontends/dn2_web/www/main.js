@@ -1,11 +1,16 @@
-// Gets the game files, then runs the engine once per animation frame.
+// The launcher: takes the game files (a zip, a folder or the files), keeps
+// them in this browser, lets the player choose the options, then runs the
+// engine once per animation frame until the player quits.
 import init, { Game, data_files, tick_hz } from './pkg/dn2_web.js';
+import { readZip } from './zip.js';
 
 const ARCHIVE = 'NUKEM2.CMP';
 /** Sound kept queued ahead of the device, in seconds (a game frame is 57 ms). */
 const QUEUE_SECONDS = 0.09;
 /** Shortest piece of sound worth scheduling, in samples. */
 const MIN_CHUNK = 256;
+/** Where the launcher's options are kept. */
+const OPTIONS_KEY = 'dn2_rust/launcher';
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,26 +20,13 @@ function status(text, isError = false) {
   $('status').className = isError ? 'panel error' : 'panel';
 }
 
-// ---- Game files: the server's data/ folder, else this browser's store, else ask.
-
-async function fetchFiles() {
-  const files = new Map();
-  for (const name of data_files()) {
-    try {
-      const response = await fetch(`data/${name}`);
-      if (response.ok) files.set(name, new Uint8Array(await response.arrayBuffer()));
-    } catch { /* not there */ }
-    // The archive comes first; without it the rest is not needed.
-    if (!files.has(ARCHIVE)) return null;
-  }
-  return files;
-}
+// ---- This browser's store: 'files' holds the game files, 'hd' an HD
+// pack's pictures, keyed by their path without .png (CZONE1.MNI/solid).
 
 function openDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('dn2_rust', 2);
     request.onupgradeneeded = () => {
-      // 'files': the game files; 'hd': an HD pack's pictures.
       for (const name of ['files', 'hd']) {
         if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name);
       }
@@ -49,11 +41,6 @@ function done(transaction) {
     transaction.oncomplete = resolve;
     transaction.onerror = transaction.onabort = () => reject(transaction.error);
   });
-}
-
-async function storedFiles() {
-  const files = await stored('files');
-  return files?.has(ARCHIVE) ? files : null;
 }
 
 /** Everything in object store `name`, or null. */
@@ -73,23 +60,35 @@ async function stored(name) {
   }
 }
 
-/** Replaces what object store `name` holds with `files`. */
-async function storeFiles(files, name = 'files') {
+/** Replaces what object store `name` holds with `files` (none: empties it). */
+async function storeFiles(name, files) {
   try {
     const db = await openDb();
     const transaction = db.transaction(name, 'readwrite');
     const store = transaction.objectStore(name);
     store.clear();
-    for (const [name, bytes] of files) store.put(bytes, name);
+    for (const [key, bytes] of files ?? []) store.put(bytes, key);
     await done(transaction);
   } catch (e) {
     console.warn(`cannot store the files in ${name}:`, e);
   }
 }
 
-// ---- An HD pack (?hd): the server's hd/ folder with its list files.txt,
-// else the one stored in this browser, else ask (?pickhd asks again).
-// Pictures are keyed by their path without .png, e.g. CZONE1.MNI/solid.
+// ---- Files served next to the page, for development: data/ with the game
+// files, hd/ with an HD pack and its list files.txt.
+
+async function fetchFiles() {
+  const files = new Map();
+  for (const name of data_files()) {
+    try {
+      const response = await fetch(`data/${name}`);
+      if (response.ok) files.set(name, new Uint8Array(await response.arrayBuffer()));
+    } catch { /* not there */ }
+    // The archive comes first; without it the rest is not needed.
+    if (!files.has(ARCHIVE)) return null;
+  }
+  return files;
+}
 
 /** Pictures fetched this many at a time. */
 const FETCHES = 16;
@@ -117,93 +116,274 @@ async function fetchHd() {
   return pictures.size ? pictures : null;
 }
 
-/** Shows the folder picker for an HD pack; null if the player skips it. */
-function pickHd() {
-  $('status').hidden = true;
-  $('pick-hd').hidden = false;
-  return new Promise((resolve) => {
-    const finish = (pictures) => { $('pick-hd').hidden = true; resolve(pictures); };
-    $('pick-hd-dir').onchange = async (e) => {
-      const pictures = new Map();
-      for (const file of e.target.files) {
-        // The path below the chosen folder.
-        const path = file.webkitRelativePath.split('/').slice(1).join('/');
-        if (path.toLowerCase().endsWith('.png')) {
-          pictures.set(path.slice(0, -4), new Uint8Array(await file.arrayBuffer()));
-        }
-      }
-      if (!pictures.size) {
-        $('pick-hd-error').textContent = 'There are no PNG pictures in that folder.';
-        return;
-      }
-      finish(pictures);
-    };
-    $('pick-hd-skip').onclick = () => finish(null);
-  });
+// ---- What the player drops or chooses: files, folders and zips of them,
+// sorted into game files and HD pictures.
+
+/** A dropped or chosen file as `{ path, read }`, read() giving its bytes. */
+function fromFile(file, path = file.webkitRelativePath || file.name) {
+  return { path, read: async () => new Uint8Array(await file.arrayBuffer()) };
 }
 
-async function hdPack(params) {
-  if (!params.has('hd') && !params.has('pickhd')) return null;
-  if (!params.has('pickhd')) {
-    const found = await fetchHd() ?? await stored('hd');
-    if (found) return found;
-  }
-  const pictures = await pickHd();
-  if (pictures) await storeFiles(pictures, 'hd');
-  return pictures;
-}
-
-/** Shows the file picker until the chosen files include the archive. */
-function pickFiles() {
-  $('status').hidden = true;
-  $('pick').hidden = false;
-  const wanted = new Set(data_files());
-  return new Promise((resolve) => {
-    const take = async (list) => {
-      const files = new Map();
-      for (const file of list) {
-        const name = file.name.toUpperCase();
-        if (wanted.has(name)) files.set(name, new Uint8Array(await file.arrayBuffer()));
+/** The files of a drop, with those in dropped folders. */
+async function droppedFiles(dataTransfer) {
+  // The entries must be taken before the first await: the list empties then.
+  const entries = [...dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) return [...dataTransfer.files].map((f) => fromFile(f));
+  const out = [];
+  const walk = async (entry) => {
+    if (entry.isFile) {
+      const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+      out.push(fromFile(file, entry.fullPath.replace(/^\//, '')));
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      // readEntries gives a batch at a time, until an empty one.
+      for (;;) {
+        const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+        if (!batch.length) break;
+        for (const child of batch) await walk(child);
       }
-      if (!files.has(ARCHIVE)) {
-        $('pick-error').textContent = `${ARCHIVE} is not among the chosen files.`;
-        return;
-      }
-      $('pick').hidden = true;
-      resolve(files);
-    };
-    for (const id of ['pick-dir', 'pick-files']) {
-      $(id).onchange = (e) => take(e.target.files);
     }
-    const drop = $('drop');
-    drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
-    drop.ondragleave = () => drop.classList.remove('over');
-    drop.ondrop = (e) => {
-      e.preventDefault();
-      drop.classList.remove('over');
-      take(e.dataTransfer.files);
+  };
+  for (const entry of entries) await walk(entry);
+  return out;
+}
+
+/** An HD picture's key (CZONE1.MNI/solid) from its path, if it is one. */
+function pictureKey(path) {
+  if (!/\.png$/i.test(path)) return null;
+  const parts = path.split('/');
+  // From the part naming the game file: CZONE1.MNI/solid.png, DROP1.MNI.png.
+  const at = parts.findIndex((p) => /\.MNI(\.png)?$/i.test(p));
+  return at < 0 ? null : parts.slice(at).join('/').slice(0, -4);
+}
+
+/** Sorts `items` (zips opened) into `{ game, pictures }` Maps of bytes. */
+async function sortFiles(items, progress) {
+  const wanted = new Set(data_files());
+  const game = new Map();
+  const pictures = new Map();
+  const take = async (item) => {
+    const name = item.path.split('/').pop().toUpperCase();
+    if (wanted.has(name)) {
+      game.set(name, await item.read());
+      return;
+    }
+    const key = pictureKey(item.path);
+    if (key) pictures.set(key, await item.read());
+  };
+  for (const item of items) {
+    if (/\.zip$/i.test(item.path)) {
+      progress(`Unpacking ${item.path}…`);
+      const entries = readZip((await item.read()).buffer);
+      for (const [i, entry] of entries.entries()) {
+        if (i % 200 === 0 && entries.length > 400) progress(`Unpacking ${item.path}… ${i} of ${entries.length}`);
+        await take(entry);
+      }
+    } else {
+      await take(item);
+    }
+  }
+  return { game, pictures };
+}
+
+// ---- The options: kept in local storage, the address may override them.
+
+const DEFAULTS = {
+  wide: false, filter: 'nearest', scale: 'auto', hd: true, aspect: 'tall', integer: false,
+  smooth: false, fullscreen: false, mute: false, start: 'game', level: 'L1',
+};
+
+function loadOptions(params) {
+  let options = { ...DEFAULTS };
+  try {
+    Object.assign(options, JSON.parse(localStorage.getItem(OPTIONS_KEY)) ?? {});
+  } catch { /* none kept */ }
+  if (params.has('wide')) options.wide = true;
+  if (params.has('filter')) options.filter = params.get('filter') === 'epx' ? 'epx' : 'nearest';
+  if (params.has('scale')) options.scale = params.get('scale');
+  if (params.has('mute')) options.mute = true;
+  if (params.has('hd')) options.hd = true;
+  if (params.has('square')) options.aspect = 'square';
+  if (params.has('integer')) options.integer = true;
+  if (params.has('viewer')) options.start = 'viewer';
+  for (const start of ['play', 'level']) {
+    if (params.has(start)) { options.start = start; options.level = params.get(start) || 'L1'; }
+  }
+  return options;
+}
+
+function saveOptions(options) {
+  try {
+    localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
+  } catch { /* not kept */ }
+}
+
+/** The options for the engine, in the form `Game` reads (a query string). */
+function engineOptions(options) {
+  const query = [];
+  if (options.wide) query.push('wide');
+  if (options.filter === 'epx') query.push('filter=epx');
+  if (options.scale !== 'auto') query.push(`scale=${options.scale}`);
+  const level = encodeURIComponent(options.level.trim() || 'L1');
+  if (options.start === 'play') query.push(`play=${level}`);
+  if (options.start === 'level') query.push(`level=${level}`);
+  if (options.start === 'viewer') query.push('viewer');
+  return query.join('&');
+}
+
+// ---- The launcher.
+
+/**
+ * Shows the launcher until the player presses Play; resolves to
+ * `{ files, pictures, options, audio }` for the game.
+ */
+function launch(state) {
+  const { options } = state;
+  $('status').hidden = true;
+  $('launcher').hidden = false;
+  document.title = 'Duke Nukem II';
+
+  const fields = [...document.querySelectorAll('#options [name], #options-game [name]')];
+  for (const field of fields) {
+    if (field.type === 'checkbox') field.checked = options[field.name];
+    else field.value = options[field.name];
+  }
+
+  const show = () => {
+    const game = state.files;
+    $('game-state').textContent = game
+      ? `ready (${game.size} files${state.fromServer ? ', from the server' : ''})`
+      : 'not loaded: drop the game here';
+    $('game-state').className = game ? 'ok' : 'missing';
+    $('forget-game').style.visibility = !game || state.fromServer ? 'hidden' : '';
+    const hd = state.pictures;
+    $('hd-state').textContent = hd ? `${hd.size} pictures` : 'none (optional)';
+    $('hd-state').className = hd ? 'ok' : 'missing';
+    $('forget-hd').style.visibility = hd ? '' : 'hidden';
+    $('o-hd').disabled = !hd;
+    const needsLevel = options.start === 'play' || options.start === 'level';
+    $('o-level').disabled = !needsLevel;
+    $('o-level-label').style.opacity = needsLevel ? 1 : 0.5;
+    $('play').disabled = !game;
+  };
+  show();
+
+  for (const field of fields) {
+    field.onchange = field.oninput = () => {
+      options[field.name] = field.type === 'checkbox' ? field.checked : field.value;
+      saveOptions(options);
+      show();
+    };
+  }
+
+  const message = (text, isError = false) => {
+    $('drop-message').textContent = text;
+    $('drop-message').className = isError ? 'error' : 'ok';
+  };
+  let busy = false;
+  const take = async (getItems) => {
+    if (busy) return;
+    busy = true;
+    $('play-error').textContent = '';
+    message('Reading…');
+    try {
+      const { game, pictures } = await sortFiles(await getItems(), message);
+      const found = [];
+      if (game.size) {
+        if (!game.has(ARCHIVE)) throw new Error(`${ARCHIVE} is not among the files: it holds the game.`);
+        state.files = game;
+        state.fromServer = false;
+        await storeFiles('files', game);
+        found.push(`the game (${game.size} files)`);
+      }
+      if (pictures.size) {
+        state.pictures = pictures;
+        options.hd = $('o-hd').checked = true;
+        saveOptions(options);
+        await storeFiles('hd', pictures);
+        found.push(`an HD pack (${pictures.size} pictures)`);
+      }
+      if (!found.length) {
+        throw new Error(`Found neither the game (${ARCHIVE}) nor HD pictures (like CZONE1.MNI/solid.png) in that.`);
+      }
+      message(`Got ${found.join(' and ')}.`);
+    } catch (e) {
+      console.error(e);
+      message(`${e.message ?? e}`, true);
+    } finally {
+      busy = false;
+      show();
+    }
+  };
+
+  for (const id of ['pick-files', 'pick-dir']) {
+    $(id).onchange = (e) => {
+      const list = [...e.target.files];
+      e.target.value = '';
+      take(async () => list.map((f) => fromFile(f)));
+    };
+  }
+  document.body.ondragover = (e) => {
+    e.preventDefault();
+    if (!$('launcher').hidden) document.body.classList.add('over');
+  };
+  document.body.ondragleave = (e) => {
+    if (!e.relatedTarget) document.body.classList.remove('over');
+  };
+  document.body.ondrop = (e) => {
+    e.preventDefault();
+    document.body.classList.remove('over');
+    if ($('launcher').hidden) return;
+    const items = droppedFiles(e.dataTransfer);
+    take(() => items);
+  };
+
+  $('forget-game').onclick = async () => {
+    state.files = null;
+    await storeFiles('files', null);
+    message('');
+    show();
+  };
+  $('forget-hd').onclick = async () => {
+    state.pictures = null;
+    await storeFiles('hd', null);
+    message('');
+    show();
+  };
+
+  return new Promise((resolve) => {
+    $('play').onclick = () => {
+      // Both need the click: browsers allow them only on the player's gesture.
+      if (options.fullscreen) document.documentElement.requestFullscreen?.().catch(() => {});
+      const audio = !options.mute && window.AudioContext
+        ? new AudioContext({ latencyHint: 'interactive' }) : null;
+      $('launcher').hidden = true;
+      $('play-error').textContent = '';
+      resolve(audio);
     };
   });
 }
 
 // ---- Running the game.
 
-function run(game, params) {
+/** Runs `game` until the player quits. */
+function run(game, options, audio) {
   const TICK_HZ = tick_hz();
   /** The rate the music runs at without sound: it still times the movies. */
   const SILENT_RATE = 50 * TICK_HZ;
   const canvas = $('screen');
   const context = canvas.getContext('2d');
   canvas.hidden = false;
+  canvas.style.imageRendering = options.smooth ? 'auto' : 'pixelated';
   canvas.focus();
+  document.body.classList.add('playing');
   $('status').hidden = true;
+  /** Ends the listeners when the game ends. */
+  const listening = new AbortController();
+  const { signal } = listening;
 
-  // Sound: created now, running after the first key or click (browsers
-  // start it only then). Until it runs, the music is mixed into nothing.
-  let audio = null;
-  if (!params.has('mute') && window.AudioContext) {
-    audio = new AudioContext({ latencyHint: 'interactive' });
-  }
+  // Sound: running after the first key or click if Play did not start it
+  // (browsers start it only then). Until it runs, the music is mixed into nothing.
   const resume = () => { if (audio?.state === 'suspended') audio.resume(); };
   /** When the next scheduled piece of sound starts, in audio time. */
   let next = 0;
@@ -240,76 +420,111 @@ function run(game, params) {
     resume();
     // Repeats change nothing in the engine, but are kept from the browser too.
     if (game.key_down(e.code)) e.preventDefault();
-  });
-  addEventListener('keyup', (e) => { if (game.key_up(e.code)) e.preventDefault(); });
-  addEventListener('pointerdown', () => { resume(); canvas.focus(); });
-  addEventListener('blur', () => game.release_all());
-  document.addEventListener('visibilitychange', () => game.release_all());
+  }, { signal });
+  addEventListener('keyup', (e) => { if (game.key_up(e.code)) e.preventDefault(); }, { signal });
+  addEventListener('pointerdown', () => { resume(); canvas.focus(); }, { signal });
+  addEventListener('blur', () => game.release_all(), { signal });
+  document.addEventListener('visibilitychange', () => game.release_all(), { signal });
 
-  // The picture: as large as fits, with the original's tall pixels
-  // (320x200 fills 4:3), centred.
+  // The picture: as large as fits, centred, with the original's tall pixels
+  // (320x200 fills 4:3) or square ones; with integer scaling, in whole
+  // device pixels per canvas pixel.
+  const tall = options.aspect === 'tall' ? 6 / 5 : 1;
   let shown = '';
   function fit(width, height) {
-    const key = `${width}x${height}x${innerWidth}x${innerHeight}`;
+    const ratio = devicePixelRatio || 1;
+    const key = `${width}x${height}x${innerWidth}x${innerHeight}x${ratio}`;
     if (key === shown) return;
     shown = key;
     canvas.width = width;
     canvas.height = height;
-    const aspect = (width * 5) / (height * 6);
-    let w = innerWidth, h = innerWidth / aspect;
-    if (h > innerHeight) { h = innerHeight; w = h * aspect; }
+    const roomW = innerWidth * ratio, roomH = innerHeight * ratio;
+    let w, h;
+    const whole = Math.floor(Math.min(roomW / width, roomH / (height * tall)));
+    if (options.integer && whole >= 1) {
+      let tallWhole = Math.round(whole * tall);
+      if (height * tallWhole > roomH) tallWhole--;
+      w = width * whole;
+      h = height * Math.max(1, tallWhole);
+    } else {
+      const aspect = width / (height * tall);
+      w = roomW; h = roomW / aspect;
+      if (h > roomH) { h = roomH; w = h * aspect; }
+    }
+    const left = Math.round((roomW - w) / 2), top = Math.round((roomH - h) / 2);
     Object.assign(canvas.style, {
-      width: `${w}px`, height: `${h}px`,
-      left: `${(innerWidth - w) / 2}px`, top: `${(innerHeight - h) / 2}px`,
+      width: `${w / ratio}px`, height: `${h / ratio}px`,
+      left: `${left / ratio}px`, top: `${top / ratio}px`,
     });
   }
 
-  let last = performance.now();
-  let ticksOwed = 0;
-  function frame(time) {
-    // The first frame's time may be earlier than the start.
-    ticksOwed += Math.max(0, time - last) / 1000 * TICK_HZ;
-    last = Math.max(last, time);
-    let ticks = Math.floor(ticksOwed);
-    // After a stall (a hidden tab) the rest is dropped, not caught up on.
-    if (ticks > TICK_HZ) { ticks = TICK_HZ; ticksOwed = 0; } else ticksOwed -= ticks;
-    if (!game.update(ticks)) {
-      audio?.close();
-      canvas.hidden = true;
-      status('The game has ended. Reload the page to play again.');
-      return;
+  return new Promise((resolve) => {
+    let last = performance.now();
+    let ticksOwed = 0;
+    function frame(time) {
+      // The first frame's time may be earlier than the start.
+      ticksOwed += Math.max(0, time - last) / 1000 * TICK_HZ;
+      last = Math.max(last, time);
+      let ticks = Math.floor(ticksOwed);
+      // After a stall (a hidden tab) the rest is dropped, not caught up on.
+      if (ticks > TICK_HZ) { ticks = TICK_HZ; ticksOwed = 0; } else ticksOwed -= ticks;
+      if (!game.update(ticks)) {
+        listening.abort();
+        audio?.close();
+        game.free();
+        canvas.hidden = true;
+        document.body.classList.remove('playing');
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        resolve();
+        return;
+      }
+      if (audio?.state === 'running') playSound(); else mixSilently(ticks);
+      const image = game.render();
+      fit(image.width, image.height);
+      context.putImageData(image, 0, 0);
+      requestAnimationFrame(frame);
     }
-    if (audio?.state === 'running') playSound(); else mixSilently(ticks);
-    const image = game.render();
-    fit(image.width, image.height);
-    context.putImageData(image, 0, 0);
     requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
+  });
 }
 
 async function main() {
   await init();
   const params = new URLSearchParams(location.search);
-  let files = await fetchFiles();
-  if (!files && !params.has('pick')) files = await storedFiles();
-  let pictures;
-  while (true) {
-    if (!files) {
-      files = await pickFiles();
-      await storeFiles(files);
+  const state = { options: loadOptions(params), files: null, pictures: null, fromServer: false };
+  status('Looking for the game files…');
+  state.files = await fetchFiles();
+  state.fromServer = !!state.files;
+  if (!state.files && !params.has('pick')) {
+    const files = await stored('files');
+    state.files = files?.has(ARCHIVE) ? files : null;
+  }
+  state.pictures = await fetchHd() ?? await stored('hd');
+
+  let start = params.has('go') && state.files;
+  for (;;) {
+    let audio = null;
+    if (start) {
+      // Sound starts suspended here, until the first key or click.
+      if (!state.options.mute && window.AudioContext) audio = new AudioContext({ latencyHint: 'interactive' });
+    } else {
+      audio = await launch(state);
     }
-    if (pictures === undefined) pictures = await hdPack(params);
+    start = false;
     status('Loading the game…');
     // Let the status show before the engine takes the thread.
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
+    const pictures = state.options.hd ? state.pictures : null;
+    let game;
     try {
-      return run(new Game(files, pictures, location.search), params);
+      game = new Game(state.files, pictures, engineOptions(state.options));
     } catch (e) {
       console.error(e);
-      files = null;
-      $('pick-error').textContent = `${e.message ?? e}`;
+      audio?.close();
+      $('play-error').textContent = `${e.message ?? e}`;
+      continue;
     }
+    await run(game, state.options, audio);
   }
 }
 
