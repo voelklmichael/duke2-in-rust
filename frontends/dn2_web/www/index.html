@@ -44,7 +44,7 @@
   #touch { position: fixed; inset: 0; z-index: 1; pointer-events: none; user-select: none;
     -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
   #touch > * { position: absolute; pointer-events: auto; }
-  #touch [data-key], #dpad { display: flex; align-items: center; justify-content: center;
+  #touch [data-key], #dpad, #menu-toggle { display: flex; align-items: center; justify-content: center;
     background: rgba(255, 255, 255, .12); border: 2px solid rgba(255, 255, 255, .35);
     color: rgba(255, 255, 255, .8); font-weight: 600; box-sizing: border-box; }
   #touch .held { background: rgba(255, 204, 51, .45); }
@@ -60,7 +60,8 @@
   .touch-keys { top: max(8px, env(safe-area-inset-top)); display: flex; gap: 8px; }
   .touch-keys.left { left: max(16px, env(safe-area-inset-left)); }
   .touch-keys.right { right: max(16px, env(safe-area-inset-right)); }
-  .touch-keys [data-key] { min-width: 52px; height: 36px; padding: 0 8px; border-radius: 6px;
+  #touch-menu { top: calc(max(8px, env(safe-area-inset-top)) + 44px); }
+  .touch-keys > * { min-width: 52px; height: 36px; padding: 0 8px; border-radius: 6px;
     font-size: 14px; }
   .error { color: #f88; }
   .hint, .small { font-size: 13px; color: #888; }
@@ -72,7 +73,8 @@
 <canvas id="screen" tabindex="0" hidden></canvas>
 <div id="status" class="panel">Loading…</div>
 <div id="touch" hidden>
-  <div class="touch-keys left"><div data-key="Escape">Esc</div><div data-key="Enter">Enter</div></div>
+  <div class="touch-keys left"><div id="menu-toggle">Menu</div><div data-key="Escape">Esc</div><div data-key="Enter">Enter</div></div>
+  <div id="touch-menu" class="touch-keys left" hidden><div data-key="F2">Save</div><div data-key="F3">Restore</div><div data-key="F1">Options</div><div data-key="KeyP">Pause</div><div data-key="KeyH">Help</div></div>
   <div class="touch-keys right"><div data-key="KeyY">Y</div><div data-key="KeyN">N</div></div>
   <div id="dpad"><span class="up">▲</span><span class="down">▼</span><span class="left">◀</span><span class="right">▶</span></div>
   <div class="touch-actions"><div data-key="AltLeft">Fire</div><div data-key="ControlLeft">Jump</div></div>

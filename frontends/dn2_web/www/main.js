@@ -416,6 +416,21 @@ function touchControls(game, signal) {
     if (!holds.get(code)) game.key_up(code);
   };
 
+  // Menu shows a second row with the game's other keys (save, restore, ...);
+  // pressing one of them hides it again.
+  const menu = $('touch-menu');
+  const toggle = $('menu-toggle');
+  signal.addEventListener('abort', () => { menu.hidden = true; });
+  toggle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    menu.hidden = !menu.hidden;
+    toggle.classList.toggle('held', !menu.hidden);
+  }, { signal });
+  const closeMenu = () => {
+    menu.hidden = true;
+    toggle.classList.remove('held');
+  };
+
   for (const button of touch.querySelectorAll('[data-key]')) {
     const code = button.dataset.key;
     const fingers = new Set();
@@ -430,6 +445,7 @@ function touchControls(game, signal) {
       if (!fingers.delete(e.pointerId)) return;
       if (!fingers.size) button.classList.remove('held');
       release(code);
+      if (menu.contains(button)) closeMenu();
     };
     button.addEventListener('pointerup', up, { signal });
     button.addEventListener('pointercancel', up, { signal });
