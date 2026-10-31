@@ -4,7 +4,8 @@
 
 use alloc::vec::Vec;
 
-use crate::Key;
+use crate::saves::{Reader, header, load_or_default};
+use crate::{Key, Store};
 
 /// The options menu's settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,13 +134,17 @@ impl Config {
     /// The store key.
     pub const KEY: &str = "config";
 
+    /// The stored settings; the default ones if none or a bad one.
+    pub fn load(store: &dyn Store) -> Self {
+        load_or_default(store, Self::KEY, Self::parse)
+    }
+
     /// Our file format: "DN2C", version 1, then the options (four flags,
     /// the speed), the six bindings as `u16` key codes (in the order of
     /// [`Bindings::get`]) and the difficulty.
     pub fn to_bytes(&self) -> Vec<u8> {
         let o = &self.options;
-        let mut out = Vec::from(*b"DN2C");
-        out.push(1);
+        let mut out = header(b"DN2C");
         out.extend([
             u8::from(o.sound_blaster),
             u8::from(o.adlib),
@@ -158,32 +163,29 @@ impl Config {
     /// Reads [`Config::to_bytes`]; `None` for a wrong header or version, a
     /// wrong length or a value out of range.
     pub fn parse(bytes: &[u8]) -> Option<Config> {
-        let rest = bytes.strip_prefix(b"DN2C")?.strip_prefix(&[1])?;
-        if rest.len() != 5 + 12 + 1 {
-            return None;
-        }
-        let flag = |b: u8| (b <= 1).then_some(b == 1);
-        let speed = rest[4];
-        if !(1..=7).contains(&speed) || rest[17] > 3 {
-            return None;
-        }
+        let mut r = Reader::new(bytes, b"DN2C", 1)?;
+        let mut flag = || match r.u8()? {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
         let options = Options {
-            sound_blaster: flag(rest[0])?,
-            adlib: flag(rest[1])?,
-            pc_speaker: flag(rest[2])?,
-            music: flag(rest[3])?,
-            speed,
+            sound_blaster: flag()?,
+            adlib: flag()?,
+            pc_speaker: flag()?,
+            music: flag()?,
+            speed: r.u8().filter(|speed| (1..=7).contains(speed))?,
         };
         let mut bindings = Bindings::default();
         for index in 1..=Bindings::COUNT {
-            let at = 5 + usize::from(index - 1) * 2;
-            let code = u16::from_le_bytes([rest[at], rest[at + 1]]);
-            *bindings.slot(index)? = Key::from_code(code)?;
+            *bindings.slot(index)? = Key::from_code(r.u16()?)?;
         }
+        let difficulty = r.u8().filter(|&d| d <= 3)?;
+        r.end()?;
         Some(Config {
             options,
             bindings,
-            difficulty: rest[17],
+            difficulty,
         })
     }
 }

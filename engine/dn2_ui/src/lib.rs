@@ -46,8 +46,6 @@ pub struct Ctx<'a> {
     pub data: &'a GameData,
     /// Keys pressed since the last step, in order.
     pub pressed: &'a [Key],
-    /// Whether any key is held now.
-    pub held: bool,
     /// Ticks of [`TICK_HZ`] since the last step.
     pub ticks: u32,
     pub events: &'a mut Vec<UiEvent>,
@@ -65,6 +63,11 @@ impl<'a> Ctx<'a> {
 
     pub fn sound(&mut self, sound: Sound) {
         self.events.push(UiEvent::Sound(sound));
+    }
+
+    /// Starts a song (an IMF file name), or stops the music.
+    pub fn music(&mut self, song: Option<&str>) {
+        self.events.push(UiEvent::Music(song.map(String::from)));
     }
 }
 

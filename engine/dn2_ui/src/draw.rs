@@ -40,6 +40,12 @@ pub const CHECK_ON: u16 = 0x970;
 /// The glyph of the colour font drawn for characters it does not have.
 const BLANK_GLYPH: usize = 0x28;
 
+/// The row of the save slot `index` (from 0) in the slot list, and of its
+/// name in the save and restore screens.
+pub fn slot_row(index: i32) -> i32 {
+    index * 2 + 6
+}
+
 /// What the screens draw with.
 #[derive(Clone, Copy)]
 pub struct Gfx<'a> {
@@ -242,7 +248,7 @@ impl Gfx<'_> {
             let name = names.get(slot).map_or("", String::as_str);
             let text = if name.is_empty() { "Empty" } else { name };
             let mask = if slot == selected { 3 } else { 2 };
-            self.colour_string(screen, mask, text.as_bytes(), slot as i32 * 2 + 6, 0xd);
+            self.colour_string(screen, mask, text.as_bytes(), slot_row(slot as i32), 0xd);
         }
     }
 

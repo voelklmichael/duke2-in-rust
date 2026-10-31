@@ -48,7 +48,6 @@ fn play(data: &GameData, kind: MovieKind) -> (u32, Vec<Sound>, bool) {
             screen: &mut screen,
             data,
             pressed: &[],
-            held: false,
             ticks: 4,
             events: &mut events,
         };

@@ -19,7 +19,7 @@ use crate::game::{Session, level_of};
 use crate::movie::{Movie, MovieKind};
 use crate::play::{Play, PlayEnd, clear_cursor, script, text_cursor, typed};
 use crate::runner::{Runner, ScriptEnd, ScriptEnv};
-use crate::saves::{HighScores, NAME_LEN, SavedGame, SlotNames};
+use crate::saves::{HighScores, NAME_LEN, SavedGame, SlotNames, is_slot};
 use crate::scene::{Scene, Step};
 use crate::{Ctx, Key, Store, UiEvent};
 
@@ -49,13 +49,11 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub fn env(&mut self, episode: u8, level: u8) -> ScriptEnv<'_> {
+    pub fn env(&mut self) -> ScriptEnv<'_> {
         ScriptEnv {
             options: &mut self.config.options,
             bindings: &self.config.bindings,
             slot_names: &self.slots.0,
-            episode,
-            level,
             menus: &mut self.menus,
         }
     }
@@ -64,6 +62,18 @@ impl Shared {
         store.save_store(Config::KEY, &self.config.to_bytes());
     }
 }
+
+/// The sections of the main menu's choices 1 to 7: the file, the section and
+/// the menu they start.
+const MAIN_MENU: [(&str, &str, Menu); 7] = [
+    ("TEXT.MNI", "Episode_Select", Menu::Episode),
+    ("OPTIONS.MNI", "Restore_Game", Menu::Restore),
+    ("OPTIONS.MNI", "My_Options", Menu::Options),
+    ("TEXT.MNI", "V4ORDER", Menu::Plain),
+    ("TEXT.MNI", "Both_S_I", Menu::Both),
+    ("TEXT.MNI", "Episode_Select", Menu::ScoresEpisode),
+    ("TEXT.MNI", "&Credits", Menu::Credits),
+];
 
 /// What a menu script was started for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +127,13 @@ enum Mode {
     KeyConfig(Box<KeyConfig>),
     /// The player chose to quit.
     Over,
+}
+
+impl Mode {
+    /// A scene that then goes on to `after`.
+    fn scene(steps: Vec<Step>, after: AfterScene) -> Self {
+        Mode::Scene(Scene::new(steps, 0), after)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,10 +195,7 @@ impl App {
     /// The program from the logo. `store` has the settings and saved
     /// games.
     pub fn new(data: &GameData, store: &dyn Store) -> Self {
-        let config = store
-            .load_store(Config::KEY)
-            .and_then(|b| Config::parse(&b))
-            .unwrap_or_default();
+        let config = Config::load(store);
         let mut menus = [0; 16];
         // The skill level starts at the last one chosen, else "medium";
         // the game speed at its setting.
@@ -296,7 +310,6 @@ impl App {
             screen: &mut self.screen,
             data,
             pressed: input.pressed,
-            held: !input.held.is_empty(),
             ticks,
             events: &mut events,
         };
@@ -366,13 +379,10 @@ impl Flow<'_> {
             // A key skips the advertisement, which the original shows to
             // its end: three pictures, ten seconds of delays.
             Mode::Script(_, Menu::Hype) if !ctx.pressed.is_empty() => self.fanfare(),
-            Mode::Script(mut runner, menu) => {
-                let (episode, level) = (1, 1);
-                match runner.step(ctx, &mut self.shared.env(episode, level)) {
-                    None => Mode::Script(runner, menu),
-                    Some(end) => self.chosen(ctx, menu, end),
-                }
-            }
+            Mode::Script(mut runner, menu) => match runner.step(ctx, &mut self.shared.env()) {
+                None => Mode::Script(runner, menu),
+                Some(end) => self.chosen(ctx, menu, end),
+            },
             Mode::Scene(mut scene, after) => {
                 if !scene.step(ctx) {
                     return Mode::Scene(scene, after);
@@ -395,10 +405,10 @@ impl Flow<'_> {
                 let over = movie.step(ctx);
                 match title {
                     // A key ends the intro.
-                    0 if key || over => {
-                        let wait = Scene::new(alloc::vec![Step::Wait(INTRO_SETTLE_TICKS)], 0);
-                        Mode::Scene(wait, AfterScene::Settle)
-                    }
+                    0 if key || over => Mode::scene(
+                        alloc::vec![Step::Wait(INTRO_SETTLE_TICKS)],
+                        AfterScene::Settle,
+                    ),
                     // A key ends the titles and the attract mode with them.
                     _ if key => self.main_menu(ctx, true),
                     _ if over => self.title(ctx, title + 1),
@@ -427,12 +437,10 @@ impl Flow<'_> {
                     Some(PlayEnd::Failed) => self.main_menu(ctx, true),
                 }
             }
-            Mode::HighScore(mut runner, entry) => {
-                match runner.step(ctx, &mut self.shared.env(1, 1)) {
-                    None => Mode::HighScore(runner, entry),
-                    Some(_) => Mode::NameEntry(entry),
-                }
-            }
+            Mode::HighScore(mut runner, entry) => match runner.step(ctx, &mut self.shared.env()) {
+                None => Mode::HighScore(runner, entry),
+                Some(_) => Mode::NameEntry(entry),
+            },
             Mode::NameEntry(entry) => self.name_entry(ctx, entry),
             Mode::KeyConfig(config) => self.step_key_config(ctx, config),
             Mode::Over => Mode::Over,
@@ -451,8 +459,7 @@ impl Flow<'_> {
     /// The menu, with its music when coming from a game or the attract mode.
     fn main_menu(&mut self, ctx: &mut Ctx, music: bool) -> Mode {
         if music {
-            ctx.events
-                .push(UiEvent::Music(Some(String::from(MENU_SONG))));
+            ctx.music(Some(MENU_SONG));
         }
         ctx.screen.palette = ctx.data.palette.clone();
         self.script(ctx, "TEXT.MNI", "Main_Menu", Menu::Main)
@@ -462,19 +469,10 @@ impl Flow<'_> {
     fn chosen(&mut self, ctx: &mut Ctx, menu: Menu, end: ScriptEnd) -> Mode {
         use ScriptEnd::{Cancel, Chosen, ExitToDemo};
         match (menu, end) {
-            (Menu::Main, Chosen(1)) => {
-                self.script(ctx, "TEXT.MNI", "Episode_Select", Menu::Episode)
+            (Menu::Main, Chosen(choice @ 1..=7)) => {
+                let (file, section, menu) = MAIN_MENU[usize::from(choice) - 1];
+                self.script(ctx, file, section, menu)
             }
-            (Menu::Main, Chosen(2)) => {
-                self.script(ctx, "OPTIONS.MNI", "Restore_Game", Menu::Restore)
-            }
-            (Menu::Main, Chosen(3)) => self.script(ctx, "OPTIONS.MNI", "My_Options", Menu::Options),
-            (Menu::Main, Chosen(4)) => self.script(ctx, "TEXT.MNI", "V4ORDER", Menu::Plain),
-            (Menu::Main, Chosen(5)) => self.script(ctx, "TEXT.MNI", "Both_S_I", Menu::Both),
-            (Menu::Main, Chosen(6)) => {
-                self.script(ctx, "TEXT.MNI", "Episode_Select", Menu::ScoresEpisode)
-            }
-            (Menu::Main, Chosen(7)) => self.script(ctx, "TEXT.MNI", "&Credits", Menu::Credits),
             (Menu::Main, ExitToDemo) => self.attract(ctx),
             (Menu::Main, _) => self.script(ctx, "TEXT.MNI", "Quit_Select", Menu::Quit),
             (Menu::Quit, Chosen(1)) => {
@@ -496,18 +494,17 @@ impl Flow<'_> {
                 let difficulty = difficulty.clamp(1, 3);
                 self.shared.config.difficulty = difficulty;
                 self.shared.save_config(self.store);
-                ctx.events.push(UiEvent::Music(None));
+                ctx.music(None);
                 Mode::Play(Box::new(Play::new(Session::new(episode, difficulty), true)))
             }
             (Menu::ScoresEpisode, Chosen(episode)) => self.scores(ctx, episode.clamp(1, 4)),
             (Menu::ScoresTitle(episode), _) => {
                 self.draw_scores(ctx, episode);
                 let steps = alloc::vec![Step::FadeIn, Step::WaitKey(None)];
-                Mode::Scene(Scene::new(steps, 0), AfterScene::MainMenu)
+                Mode::scene(steps, AfterScene::MainMenu)
             }
             (Menu::Credits, _) => {
-                let wait = Scene::new(alloc::vec![Step::WaitKey(None)], 0);
-                Mode::Scene(wait, AfterScene::MainMenu)
+                Mode::scene(alloc::vec![Step::WaitKey(None)], AfterScene::MainMenu)
             }
             (Menu::Both, Chosen(1)) => self.script(ctx, "TEXT.MNI", "&Instructions", Menu::Plain),
             (Menu::Both, Chosen(2)) => self.script(ctx, "TEXT.MNI", "&Story", Menu::Plain),
@@ -526,7 +523,7 @@ impl Flow<'_> {
                 }
                 self.script(ctx, "OPTIONS.MNI", "My_Options", Menu::Options)
             }
-            (Menu::Restore, Chosen(slot)) if (1..=8).contains(&slot) => {
+            (Menu::Restore, Chosen(slot)) if is_slot(slot) => {
                 if SavedGame::load(self.store, slot).is_some() {
                     self.script(ctx, "TEXT.MNI", "&Load", Menu::Restoring(slot))
                 } else {
@@ -538,7 +535,7 @@ impl Flow<'_> {
             }
             (Menu::Restoring(slot), _) => match SavedGame::load(self.store, slot) {
                 Some(saved) => {
-                    ctx.events.push(UiEvent::Music(None));
+                    ctx.music(None);
                     Mode::Play(Box::new(Play::new(saved.session(), false)))
                 }
                 None => self.main_menu(ctx, false),
@@ -554,19 +551,15 @@ impl Flow<'_> {
 
     /// The screen fades out and the fanfare starts; the movie follows.
     fn fanfare(&mut self) -> Mode {
-        let steps = alloc::vec![
-            Step::FadeOut,
-            Step::Music(Some(String::from("FANFAREA.IMF"))),
-        ];
-        Mode::Scene(Scene::new(steps, 0), AfterScene::Fanfare)
+        let steps = alloc::vec![Step::FadeOut, Step::music("FANFAREA.IMF")];
+        Mode::scene(steps, AfterScene::Fanfare)
     }
 
     /// The music and the titles, the story (the first time), the credits, two
     /// waits for a key, the demo. Also what the main menu starts when it sits
     /// idle.
     fn attract(&mut self, ctx: &mut Ctx) -> Mode {
-        ctx.events
-            .push(UiEvent::Music(Some(String::from("RANGEA.IMF"))));
+        ctx.music(Some("RANGEA.IMF"));
         self.title(ctx, 1)
     }
 
@@ -600,7 +593,7 @@ impl Flow<'_> {
         if ctx.data.demo.is_empty() {
             return self.main_menu(ctx, true);
         }
-        ctx.events.push(UiEvent::Music(None));
+        ctx.music(None);
         Mode::Play(Box::new(Play::demo(ctx.data)))
     }
 
@@ -627,8 +620,7 @@ impl Flow<'_> {
     /// The game ended (won, or quit): a name for the high score table if
     /// the score is good enough, then the table, then the menu.
     fn game_over(&mut self, ctx: &mut Ctx, episode: u8, score: u32) -> Mode {
-        ctx.events
-            .push(UiEvent::Music(Some(String::from(MENU_SONG))));
+        ctx.music(Some(MENU_SONG));
         let scores = HighScores::load(self.store, episode);
         let Some(position) = scores.position(score) else {
             return self.scores(ctx, episode);
@@ -719,7 +711,7 @@ impl Flow<'_> {
     fn step_key_config(&mut self, ctx: &mut Ctx, mut config: Box<KeyConfig>) -> Mode {
         let gfx = ctx.gfx();
         let Some((index, in_use)) = config.asking else {
-            return match config.runner.step(ctx, &mut self.shared.env(1, 1)) {
+            return match config.runner.step(ctx, &mut self.shared.env()) {
                 None => Mode::KeyConfig(config),
                 Some(ScriptEnd::Chosen(index)) if (1..=Bindings::COUNT).contains(&index) => {
                     gfx.text(ctx.screen, b"Press a key to use..", 0x13, 10);

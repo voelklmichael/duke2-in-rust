@@ -56,7 +56,6 @@ fn run_keys(
             screen: &mut screen,
             data,
             pressed,
-            held: !pressed.is_empty(),
             ticks: 5,
             events: &mut events,
         };
