@@ -1,6 +1,6 @@
 # Duke Nukem II in Rust
 
-A Rust rewrite of **Duke Nukem II** (Apogee, 1993): the game's engine written again
+A Rust rewrite of **[Duke Nukem II](https://de.wikipedia.org/wiki/Duke_Nukem_II)** (Apogee, 1993): the game's engine written again
 from scratch. It reads the original game files and plays them, in a desktop window
 or in the browser.
 
