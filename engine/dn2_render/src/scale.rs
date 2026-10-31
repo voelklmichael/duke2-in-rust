@@ -21,6 +21,12 @@ pub enum Filter {
     /// Edges smoothed: EPX at scale 2, its 3x form at 3, EPX twice at 4;
     /// other scales fall back to blocks.
     Epx,
+    /// Edges smoothed and blended, after xBR ([`crate::xbr`]): lines get
+    /// soft edges and new colours, at any scale from 2. [`upscale`] works
+    /// on palette indices and so makes blocks; [`Screen::present`] uses it.
+    ///
+    /// [`Screen::present`]: crate::Screen::present
+    Xbr,
 }
 
 /// `image` made `scale` times larger.

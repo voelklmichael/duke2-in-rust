@@ -10,6 +10,7 @@ pub mod hud;
 pub mod scale;
 mod screen;
 pub mod view;
+pub mod xbr;
 
 pub use frame::FrameBuffer;
 pub use scale::Filter;

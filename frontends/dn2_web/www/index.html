@@ -85,6 +85,7 @@
     <select id="o-filter" name="filter">
       <option value="nearest">Pixels (nearest)</option>
       <option value="epx">Smoothed edges (EPX)</option>
+      <option value="xbr">Smoothed, blended edges (xBR)</option>
     </select>
 
     <label for="o-scale">Render scale</label>
@@ -95,8 +96,8 @@
       <option value="3">3×</option>
       <option value="4">4×</option>
     </select>
-    <span class="hint">Pixels per game pixel before fitting to the window. Auto: 1×, or 3× with EPX or
-      an HD pack. EPX works at 2× to 4×.</span>
+    <span class="hint">Pixels per game pixel before fitting to the window. Auto: 1×, or 3× with a
+      smoothing filter or an HD pack. EPX works at 2× to 4×, xBR at any scale from 2×.</span>
 
     <label for="o-hd">HD pictures</label>
     <label><input id="o-hd" name="hd" type="checkbox"> Use the HD pack</label>
