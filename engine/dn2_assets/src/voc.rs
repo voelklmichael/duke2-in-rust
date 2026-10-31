@@ -7,7 +7,6 @@
 //! packings that the DSP decodes itself (4, 2.6 and 2 bits per sample, chosen
 //! by the pack byte). Here a whole file is decoded to 8-bit samples.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::AssetError;
@@ -19,18 +18,11 @@ pub struct Sample {
     pub data: Vec<u8>,
 }
 
-fn invalid(name: &str, reason: &'static str) -> AssetError {
-    AssetError::Malformed {
-        file: String::from(name),
-        reason,
-    }
-}
-
 /// Parses and decodes a VOC file; `name` is for errors.
 pub fn parse(name: &str, file: &[u8]) -> Result<Sample, AssetError> {
     const MAGIC: &[u8] = b"Creative Voice File\x1a";
     if file.len() < 26 || &file[..20] != MAGIC {
-        return Err(invalid(name, "bad signature"));
+        return Err(AssetError::malformed(name, "bad signature"));
     }
     let mut pos = usize::from(u16::from_le_bytes([file[20], file[21]]));
     let mut rate = 0;
@@ -40,10 +32,10 @@ pub fn parse(name: &str, file: &[u8]) -> Result<Sample, AssetError> {
         let size = file
             .get(pos + 1..pos + 4)
             .map(|s| usize::from(s[0]) | usize::from(s[1]) << 8 | usize::from(s[2]) << 16)
-            .ok_or_else(|| invalid(name, "truncated block"))?;
+            .ok_or_else(|| AssetError::malformed(name, "truncated block"))?;
         let body = file
             .get(pos + 4..pos + 4 + size)
-            .ok_or_else(|| invalid(name, "truncated block"))?;
+            .ok_or_else(|| AssetError::malformed(name, "truncated block"))?;
         pos += 4 + size;
         match kind {
             1 if body.len() >= 2 => {
@@ -51,7 +43,7 @@ pub fn parse(name: &str, file: &[u8]) -> Result<Sample, AssetError> {
                     rate = time_constant_rate(body[0]);
                 }
                 decode(body[1], &body[2..], &mut data)
-                    .ok_or_else(|| invalid(name, "unknown packing"))?;
+                    .ok_or_else(|| AssetError::malformed(name, "unknown packing"))?;
             }
             2 => data.extend_from_slice(body),
             3 if body.len() >= 3 && rate != 0 => {
@@ -64,7 +56,7 @@ pub fn parse(name: &str, file: &[u8]) -> Result<Sample, AssetError> {
         }
     }
     if rate == 0 {
-        return Err(invalid(name, "no sound data"));
+        return Err(AssetError::malformed(name, "no sound data"));
     }
     Ok(Sample { rate, data })
 }
@@ -92,19 +84,19 @@ fn decode(pack: u8, body: &[u8], out: &mut Vec<u8>) -> Option<()> {
             for &byte in rest {
                 match pack {
                     1 => {
-                        out.push(state.step4(byte >> 4));
-                        out.push(state.step4(byte & 15));
+                        out.push(state.step(byte >> 4, &SCALE4, &ADJUST4));
+                        out.push(state.step(byte & 15, &SCALE4, &ADJUST4));
                     }
                     2 => {
-                        out.push(state.step3((byte >> 5) & 7));
-                        out.push(state.step3((byte >> 2) & 7));
-                        out.push(state.step3((byte & 3) << 1));
+                        out.push(state.step((byte >> 5) & 7, &SCALE3, &ADJUST3));
+                        out.push(state.step((byte >> 2) & 7, &SCALE3, &ADJUST3));
+                        out.push(state.step((byte & 3) << 1, &SCALE3, &ADJUST3));
                     }
                     _ => {
-                        out.push(state.step2(byte >> 6));
-                        out.push(state.step2((byte >> 4) & 3));
-                        out.push(state.step2((byte >> 2) & 3));
-                        out.push(state.step2(byte & 3));
+                        out.push(state.step(byte >> 6, &SCALE2, &ADJUST2));
+                        out.push(state.step((byte >> 4) & 3, &SCALE2, &ADJUST2));
+                        out.push(state.step((byte >> 2) & 3, &SCALE2, &ADJUST2));
+                        out.push(state.step(byte & 3, &SCALE2, &ADJUST2));
                     }
                 }
             }
@@ -113,6 +105,33 @@ fn decode(pack: u8, body: &[u8], out: &mut Vec<u8>) -> Option<()> {
     }
     Some(())
 }
+
+/// The step tables of the 4-, 3- and 2-bit packings: the change to the
+/// reference per code, and to the scale.
+const SCALE4: [i8; 64] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 0, -1, -2, -3, -4, -5, -6, -7, 1, 3, 5, 7, 9, 11, 13, 15, -1, -3, -5,
+    -7, -9, -11, -13, -15, 2, 6, 10, 14, 18, 22, 26, 30, -2, -6, -10, -14, -18, -22, -26, -30, 4,
+    12, 20, 28, 36, 44, 52, 60, -4, -12, -20, -28, -36, -44, -52, -60,
+];
+const ADJUST4: [i8; 64] = [
+    0, 0, 0, 0, 0, 16, 16, 16, 0, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0,
+    0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 0,
+    0, 0, -16, 0, 0, 0, 0, 0, 0, 0,
+];
+const SCALE3: [i8; 40] = [
+    0, 1, 2, 3, 0, -1, -2, -3, 1, 3, 5, 7, -1, -3, -5, -7, 2, 6, 10, 14, -2, -6, -10, -14, 4, 12,
+    20, 28, -4, -12, -20, -28, 5, 15, 25, 35, -5, -15, -25, -35,
+];
+const ADJUST3: [i8; 40] = [
+    0, 0, 0, 8, 0, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0, 8, -8, 0,
+    0, 8, -8, 0, 0, 0, -8, 0, 0, 0,
+];
+const SCALE2: [i8; 24] = [
+    0, 1, 0, -1, 1, 3, -1, -3, 2, 6, -2, -6, 4, 12, -4, -12, 8, 24, -8, -24, 6, 48, -16, -48,
+];
+const ADJUST2: [i8; 24] = [
+    0, 4, 0, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 0, -4, 0,
+];
 
 /// The Sound Blaster DSP's ADPCM decoder state: the current sample and a
 /// step scale (a multiple of the code range, so it selects a table row).
@@ -128,43 +147,6 @@ impl Adpcm {
             (i32::from(self.reference) + i32::from(scale_map[index])).clamp(0, 255) as u8;
         self.scale = (self.scale + i32::from(adjust_map[index])).clamp(0, 255);
         self.reference
-    }
-
-    fn step4(&mut self, code: u8) -> u8 {
-        const SCALE: [i8; 64] = [
-            0, 1, 2, 3, 4, 5, 6, 7, 0, -1, -2, -3, -4, -5, -6, -7, 1, 3, 5, 7, 9, 11, 13, 15, -1,
-            -3, -5, -7, -9, -11, -13, -15, 2, 6, 10, 14, 18, 22, 26, 30, -2, -6, -10, -14, -18,
-            -22, -26, -30, 4, 12, 20, 28, 36, 44, 52, 60, -4, -12, -20, -28, -36, -44, -52, -60,
-        ];
-        const ADJUST: [i8; 64] = [
-            0, 0, 0, 0, 0, 16, 16, 16, 0, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16, -16,
-            0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16, -16,
-            0, 0, 0, 0, 0, 0, 0, -16, 0, 0, 0, 0, 0, 0, 0,
-        ];
-        self.step(code, &SCALE, &ADJUST)
-    }
-
-    fn step3(&mut self, code: u8) -> u8 {
-        const SCALE: [i8; 40] = [
-            0, 1, 2, 3, 0, -1, -2, -3, 1, 3, 5, 7, -1, -3, -5, -7, 2, 6, 10, 14, -2, -6, -10, -14,
-            4, 12, 20, 28, -4, -12, -20, -28, 5, 15, 25, 35, -5, -15, -25, -35,
-        ];
-        const ADJUST: [i8; 40] = [
-            0, 0, 0, 8, 0, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0, 8, -8, 0, 0,
-            8, -8, 0, 0, 8, -8, 0, 0, 0, -8, 0, 0, 0,
-        ];
-        self.step(code, &SCALE, &ADJUST)
-    }
-
-    fn step2(&mut self, code: u8) -> u8 {
-        const SCALE: [i8; 24] = [
-            0, 1, 0, -1, 1, 3, -1, -3, 2, 6, -2, -6, 4, 12, -4, -12, 8, 24, -8, -24, 6, 48, -16,
-            -48,
-        ];
-        const ADJUST: [i8; 24] = [
-            0, 4, 0, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 4, -4, 0, -4, 0,
-        ];
-        self.step(code, &SCALE, &ADJUST)
     }
 }
 

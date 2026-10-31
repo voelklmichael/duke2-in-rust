@@ -11,3 +11,13 @@ pub enum AssetError {
     #[error("no complete episode found in the game data")]
     NoEpisodes,
 }
+
+impl AssetError {
+    /// A [`AssetError::Malformed`] in `file`.
+    pub fn malformed(file: &str, reason: &'static str) -> Self {
+        Self::Malformed {
+            file: String::from(file),
+            reason,
+        }
+    }
+}
