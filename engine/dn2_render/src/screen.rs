@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use crate::FrameBuffer;
 use crate::scale::{Filter, upscale};
+use crate::xbr::xbr;
 
 /// A picture of palette indices with its palette: what the original had in
 /// video memory and the DAC.
@@ -384,16 +385,22 @@ impl Screen {
         let scale = scale.max(1);
         let palette = self.faded_palette();
         let colors: Vec<u32> = (0..=255).map(|i| palette.get(i).to_u32()).collect();
-        let large;
-        let image = if scale == 1 {
-            &self.image
+        if filter == Filter::Xbr && scale > 1 {
+            // It blends colours: from the indices straight to RGB.
+            frame.resize(self.image.width * scale, self.image.height * scale);
+            xbr(&self.image, &colors, scale, &mut frame.pixels);
         } else {
-            large = upscale(&self.image, scale, filter);
-            &large
-        };
-        frame.resize(image.width, image.height);
-        for (pixel, &index) in frame.pixels.iter_mut().zip(&image.pixels) {
-            *pixel = colors[usize::from(index)];
+            let large;
+            let image = if scale == 1 {
+                &self.image
+            } else {
+                large = upscale(&self.image, scale, filter);
+                &large
+            };
+            frame.resize(image.width, image.height);
+            for (pixel, &index) in frame.pixels.iter_mut().zip(&image.pixels) {
+                *pixel = colors[usize::from(index)];
+            }
         }
         let Some(hd) = self.hd.as_ref().filter(|hd| hd.scale == scale) else {
             return;

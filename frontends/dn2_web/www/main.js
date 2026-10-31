@@ -210,7 +210,10 @@ function loadOptions(params) {
     Object.assign(options, JSON.parse(localStorage.getItem(OPTIONS_KEY)) ?? {});
   } catch { /* none kept */ }
   if (params.has('wide')) options.wide = true;
-  if (params.has('filter')) options.filter = params.get('filter') === 'epx' ? 'epx' : 'nearest';
+  if (params.has('filter')) {
+    const filter = params.get('filter');
+    options.filter = ['epx', 'xbr'].includes(filter) ? filter : 'nearest';
+  }
   if (params.has('scale')) options.scale = params.get('scale');
   if (params.has('mute')) options.mute = true;
   if (params.has('hd')) options.hd = true;
@@ -233,7 +236,7 @@ function saveOptions(options) {
 function engineOptions(options) {
   const query = [];
   if (options.wide) query.push('wide');
-  if (options.filter === 'epx') query.push('filter=epx');
+  if (options.filter !== 'nearest') query.push(`filter=${options.filter}`);
   if (options.scale !== 'auto') query.push(`scale=${options.scale}`);
   const level = encodeURIComponent(options.level.trim() || 'L1');
   if (options.start === 'play') query.push(`play=${level}`);

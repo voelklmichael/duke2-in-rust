@@ -56,7 +56,7 @@ impl Game {
     /// (`Uint8Array`); `pictures`, if given, maps the names of an HD pack's
     /// pictures (`CZONE1.MNI/solid`, without `.png`) to their PNG bytes;
     /// `options` are the launcher's, as a query string: `wide`,
-    /// `filter=epx`, `scale=N`, `play=L1`, `level=L1`, `viewer`.
+    /// `filter=epx` or `xbr`, `scale=N`, `play=L1`, `level=L1`, `viewer`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         files: js_sys::Map,
@@ -169,6 +169,7 @@ fn parse_options(query: &str, hd: bool) -> Settings {
         match key {
             "wide" => settings.columns = WIDESCREEN_COLUMNS,
             "filter" if value == "epx" => settings.filter = Filter::Epx,
+            "filter" if value == "xbr" => settings.filter = Filter::Xbr,
             "scale" => scale = value.parse().ok(),
             "play" => settings.start = Start::Play { name: file(value) },
             "level" => {

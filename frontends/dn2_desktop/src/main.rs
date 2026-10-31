@@ -21,8 +21,8 @@ struct Args {
     /// window (default 1, or 3 with a smoothing filter or an HD pack).
     #[arg(long)]
     scale: Option<u32>,
-    /// How the picture is made larger: nearest (blocks) or epx (smoothed
-    /// edges, at scales 2 to 4).
+    /// How the picture is made larger: nearest (blocks), epx (smoothed
+    /// edges, at scales 2 to 4) or xbr (smoothed and blended edges).
     #[arg(long, value_enum, default_value_t = FilterArg::Nearest)]
     filter: FilterArg,
     /// A folder of higher-detail pictures (an HD pack: CZONE1.MNI/solid.png,
@@ -61,6 +61,7 @@ struct Args {
 enum FilterArg {
     Nearest,
     Epx,
+    Xbr,
 }
 
 /// Buttons to hold, each for a number of frames.
@@ -124,6 +125,7 @@ fn main() -> anyhow::Result<()> {
     let filter = match args.filter {
         FilterArg::Nearest => Filter::Nearest,
         FilterArg::Epx => Filter::Epx,
+        FilterArg::Xbr => Filter::Xbr,
     };
     let default_scale = if filter == Filter::Nearest && args.hd.is_none() {
         1
