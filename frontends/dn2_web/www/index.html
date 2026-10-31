@@ -35,9 +35,33 @@
   button.small { padding: .1em .6em; font-size: 13px; }
   input[type=text] { width: 4em; }
   input[type=file] { display: none; }
-  #play { margin-top: 1.6em; font-size: 20px; padding: .5em 2.5em; background: #fc3;
+  .play { display: flex; flex-wrap: wrap; gap: .8em; margin-top: 1.6em; }
+  .play button { font-size: 20px; padding: .5em 2em; background: #fc3;
     color: #000; border: none; font-weight: 600; }
-  #play:disabled { background: #444; color: #888; cursor: default; }
+  .play button:disabled { background: #444; color: #888; cursor: default; }
+  body.playing, canvas { touch-action: none; }
+  /* On-screen controls, over the picture. */
+  #touch { position: fixed; inset: 0; z-index: 1; pointer-events: none; user-select: none;
+    -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
+  #touch > * { position: absolute; pointer-events: auto; }
+  #touch [data-key], #dpad { display: flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, .12); border: 2px solid rgba(255, 255, 255, .35);
+    color: rgba(255, 255, 255, .8); font-weight: 600; box-sizing: border-box; }
+  #touch .held { background: rgba(255, 204, 51, .45); }
+  #dpad { left: max(16px, env(safe-area-inset-left)); top: 50%; transform: translateY(-50%);
+    width: 150px; height: 150px; border-radius: 50%; }
+  #dpad span { position: absolute; font-size: 22px; }
+  #dpad .up { top: 6px; } #dpad .down { bottom: 6px; }
+  #dpad .left { left: 12px; } #dpad .right { right: 12px; }
+  .touch-actions { right: max(16px, env(safe-area-inset-right));
+    top: 50%; transform: translateY(-50%); display: flex; align-items: flex-end; gap: 14px; }
+  .touch-actions [data-key] { width: 76px; height: 76px; border-radius: 50%; }
+  .touch-actions [data-key="AltLeft"] { margin-bottom: 50px; }
+  .touch-keys { top: max(8px, env(safe-area-inset-top)); display: flex; gap: 8px; }
+  .touch-keys.left { left: max(16px, env(safe-area-inset-left)); }
+  .touch-keys.right { right: max(16px, env(safe-area-inset-right)); }
+  .touch-keys [data-key] { min-width: 52px; height: 36px; padding: 0 8px; border-radius: 6px;
+    font-size: 14px; }
   .error { color: #f88; }
   .hint, .small { font-size: 13px; color: #888; }
   code { color: #ddd; }
@@ -47,6 +71,12 @@
 <body>
 <canvas id="screen" tabindex="0" hidden></canvas>
 <div id="status" class="panel">Loading…</div>
+<div id="touch" hidden>
+  <div class="touch-keys left"><div data-key="Escape">Esc</div><div data-key="Enter">Enter</div></div>
+  <div class="touch-keys right"><div data-key="KeyY">Y</div><div data-key="KeyN">N</div></div>
+  <div id="dpad"><span class="up">▲</span><span class="down">▼</span><span class="left">◀</span><span class="right">▶</span></div>
+  <div class="touch-actions"><div data-key="AltLeft">Fire</div><div data-key="ControlLeft">Jump</div></div>
+</div>
 
 <main id="launcher" hidden>
   <h1>Duke Nukem II</h1>
@@ -137,12 +167,16 @@
     <input id="o-level" name="level" type="text" placeholder="L1" spellcheck="false">
   </form>
 
-  <button id="play" disabled>Play</button>
+  <div class="play">
+    <button id="play" disabled>Play</button>
+    <button id="play-mobile" disabled>Play mobile</button>
+  </div>
   <p id="play-error" class="error" aria-live="polite"></p>
   <p class="small">Keys: arrows to move, Ctrl to jump, Alt to fire, Esc for the menu.
+    Play mobile shows on-screen controls instead and goes fullscreen.
     Quitting the game comes back here.
     The address may carry the options too (<code>?wide&amp;filter=epx&amp;scale=3</code>);
-    <code>?go</code> starts right away.</p>
+    <code>?go</code> starts right away, <code>?go&amp;touch</code> with on-screen controls.</p>
 </main>
 
 <script type="module">

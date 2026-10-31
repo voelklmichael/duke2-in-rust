@@ -254,8 +254,8 @@ function engineOptions(options) {
 // ---- The launcher.
 
 /**
- * Shows the launcher until the player presses Play; resolves to
- * `{ files, pictures, options, audio }` for the game.
+ * Shows the launcher until the player presses Play or Play mobile; resolves to
+ * `{ audio, touch }` for the game, touch for the on-screen controls.
  */
 function launch(state) {
   const { options } = state;
@@ -284,7 +284,7 @@ function launch(state) {
     const needsLevel = options.start === 'play' || options.start === 'level';
     $('o-level').disabled = !needsLevel;
     $('o-level-label').style.opacity = needsLevel ? 1 : 0.5;
-    $('play').disabled = !game;
+    $('play').disabled = $('play-mobile').disabled = !game;
   };
   show();
 
@@ -372,22 +372,107 @@ function launch(state) {
   };
 
   return new Promise((resolve) => {
-    $('play').onclick = () => {
+    const start = (touch) => {
       // Both need the click: browsers allow them only on the player's gesture.
-      if (options.fullscreen) document.documentElement.requestFullscreen?.().catch(() => {});
+      if (options.fullscreen || touch) {
+        document.documentElement.requestFullscreen?.()
+          .then(() => touch && screen.orientation?.lock?.('landscape'))
+          .catch(() => {});
+      }
       const audio = !options.mute && window.AudioContext
         ? new AudioContext({ latencyHint: 'interactive' }) : null;
       $('launcher').hidden = true;
       $('play-error').textContent = '';
-      resolve(audio);
+      resolve({ audio, touch });
     };
+    $('play').onclick = () => start(false);
+    $('play-mobile').onclick = () => start(true);
   });
 }
 
 // ---- Running the game.
 
-/** Runs `game` until the player quits. */
-function run(game, options, audio) {
+/**
+ * Shows the on-screen controls and presses `game`'s keys for them, until
+ * `signal` aborts.
+ */
+function touchControls(game, signal) {
+  const touch = $('touch');
+  touch.hidden = false;
+  signal.addEventListener('abort', () => {
+    touch.hidden = true;
+    for (const held of touch.querySelectorAll('.held')) held.classList.remove('held');
+  });
+  touch.addEventListener('contextmenu', (e) => e.preventDefault(), { signal });
+
+  /** How many fingers hold each key: one may lift while another still holds it. */
+  const holds = new Map();
+  const press = (code) => {
+    holds.set(code, (holds.get(code) ?? 0) + 1);
+    if (holds.get(code) === 1) game.key_down(code);
+  };
+  const release = (code) => {
+    holds.set(code, holds.get(code) - 1);
+    if (!holds.get(code)) game.key_up(code);
+  };
+
+  for (const button of touch.querySelectorAll('[data-key]')) {
+    const code = button.dataset.key;
+    const fingers = new Set();
+    button.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      button.setPointerCapture(e.pointerId);
+      fingers.add(e.pointerId);
+      button.classList.add('held');
+      press(code);
+    }, { signal });
+    const up = (e) => {
+      if (!fingers.delete(e.pointerId)) return;
+      if (!fingers.size) button.classList.remove('held');
+      release(code);
+    };
+    button.addEventListener('pointerup', up, { signal });
+    button.addEventListener('pointercancel', up, { signal });
+  }
+
+  // The pad: the direction from its centre to each finger on it, eight ways.
+  const pad = $('dpad');
+  /** The arrow keys each finger on the pad holds. */
+  const fingers = new Map();
+  const TAN = Math.tan(Math.PI / 8);
+  const aim = (e) => {
+    const box = pad.getBoundingClientRect();
+    const dx = e.clientX - (box.left + box.width / 2);
+    const dy = e.clientY - (box.top + box.height / 2);
+    const now = new Set();
+    // A small dead zone in the middle.
+    if (Math.hypot(dx, dy) > box.width * 0.12) {
+      if (Math.abs(dx) > TAN * Math.abs(dy)) now.add(dx < 0 ? 'ArrowLeft' : 'ArrowRight');
+      if (Math.abs(dy) > TAN * Math.abs(dx)) now.add(dy < 0 ? 'ArrowUp' : 'ArrowDown');
+    }
+    const before = fingers.get(e.pointerId) ?? new Set();
+    for (const code of before) if (!now.has(code)) release(code);
+    for (const code of now) if (!before.has(code)) press(code);
+    fingers.set(e.pointerId, now);
+  };
+  const lift = (e) => {
+    for (const code of fingers.get(e.pointerId) ?? []) release(code);
+    fingers.delete(e.pointerId);
+    pad.classList.toggle('held', fingers.size > 0);
+  };
+  pad.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    pad.setPointerCapture(e.pointerId);
+    pad.classList.add('held');
+    aim(e);
+  }, { signal });
+  pad.addEventListener('pointermove', (e) => { if (fingers.has(e.pointerId)) aim(e); }, { signal });
+  pad.addEventListener('pointerup', lift, { signal });
+  pad.addEventListener('pointercancel', lift, { signal });
+}
+
+/** Runs `game` until the player quits; `touch` shows the on-screen controls. */
+function run(game, options, audio, touch) {
   const TICK_HZ = tick_hz();
   /** The rate the music runs at without sound: it still times the movies. */
   const SILENT_RATE = 50 * TICK_HZ;
@@ -445,6 +530,7 @@ function run(game, options, audio) {
   addEventListener('pointerdown', () => { resume(); canvas.focus(); }, { signal });
   addEventListener('blur', () => game.release_all(), { signal });
   document.addEventListener('visibilitychange', () => game.release_all(), { signal });
+  if (touch) touchControls(game, signal);
 
   // The picture: as large as fits, centred, with the original's tall pixels
   // (320x200 fills 4:3) or square ones; with integer scaling, in whole
@@ -471,7 +557,9 @@ function run(game, options, audio) {
       w = roomW; h = roomW / aspect;
       if (h > roomH) { h = roomH; w = h * aspect; }
     }
-    const left = Math.round((roomW - w) / 2), top = Math.round((roomH - h) / 2);
+    const left = Math.round((roomW - w) / 2);
+    // With the on-screen controls, at the top: in portrait they go below it.
+    const top = touch ? 0 : Math.round((roomH - h) / 2);
     Object.assign(canvas.style, {
       width: `${w / ratio}px`, height: `${h / ratio}px`,
       left: `${left / ratio}px`, top: `${top / ratio}px`,
@@ -524,11 +612,12 @@ async function main() {
   let start = params.has('go') && state.files;
   for (;;) {
     let audio = null;
+    let touch = params.has('touch');
     if (start) {
       // Sound starts suspended here, until the first key or click.
       if (!state.options.mute && window.AudioContext) audio = new AudioContext({ latencyHint: 'interactive' });
     } else {
-      audio = await launch(state);
+      ({ audio, touch } = await launch(state));
     }
     start = false;
     status('Loading the game…');
@@ -544,7 +633,7 @@ async function main() {
       $('play-error').textContent = `${e.message ?? e}`;
       continue;
     }
-    await run(game, state.options, audio);
+    await run(game, state.options, audio, touch);
   }
 }
 
