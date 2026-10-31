@@ -145,6 +145,13 @@
     <code>?go</code> starts right away.</p>
 </main>
 
-<script type="module" src="main.js"></script>
+<script type="module">
+  // The browser may keep scripts and the wasm cached across builds, so each build
+  // is asked for by its version (version.txt, written by build.sh), which is always
+  // checked with the server.
+  const version = await fetch('version.txt', { cache: 'no-cache' })
+    .then((response) => response.ok ? response.text() : '', () => '');
+  await import(`./main.js?v=${encodeURIComponent(version.trim())}`);
+</script>
 </body>
 </html>
