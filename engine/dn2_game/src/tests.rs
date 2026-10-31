@@ -233,16 +233,16 @@ fn attributes_follow_the_cell_kind() {
     grid.cells[8 * W + 8] = 0x8000 | 1;
     let world = grid.world();
     let map = &world.map;
-    assert_eq!(map.attributes(0, 20), A::SOLID);
-    assert_eq!(map.attributes(3, 5), A::CLIMBABLE | A::IN_FRONT);
-    assert_eq!(map.attributes(7, 5), A::HANGABLE);
-    assert_eq!(map.attributes(8, 8), A::empty());
-    assert_eq!(map.attributes(10, 3), A::empty());
+    assert_eq!(map.attributes_at(0, 20), A::SOLID);
+    assert_eq!(map.attributes_at(3, 5), A::CLIMBABLE | A::IN_FRONT);
+    assert_eq!(map.attributes_at(7, 5), A::HANGABLE);
+    assert_eq!(map.attributes_at(8, 8), A::empty());
+    assert_eq!(map.attributes_at(10, 3), A::empty());
     // Past the right edge is the next row's start, as in the original;
     // below the stored cells, nothing.
-    assert_eq!(map.attributes(W as u16, 19), map.attributes(0, 20));
-    assert_eq!(map.attributes(W as u16, 19), A::SOLID);
-    assert_eq!(map.attributes(2, 200), A::empty());
+    assert_eq!(map.attributes_at(W as i32, 19), map.attributes_at(0, 20));
+    assert_eq!(map.attributes_at(W as i32, 19), A::SOLID);
+    assert_eq!(map.attributes_at(2, 200), A::empty());
 }
 
 #[test]

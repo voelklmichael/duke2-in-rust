@@ -57,6 +57,19 @@ pub enum Draw {
     },
 }
 
+impl Draw {
+    /// A sprite drawn the normal way.
+    pub fn sprite(id: u16, frame: u16, x: i32, y: i32) -> Self {
+        Self::Sprite(Sprite {
+            id,
+            frame,
+            x,
+            y,
+            look: SpriteLook::Normal,
+        })
+    }
+}
+
 /// A sprite frame placed in the map, for the box tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Placed {

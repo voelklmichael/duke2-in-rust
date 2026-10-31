@@ -128,10 +128,6 @@ impl Map {
     /// code reads them: word `cell / 8` of the attribute block. That is the
     /// solid tile, or for a masked cell (8000 + 40 * tile) the first of the
     /// tile's 5 words. Layered cells (bit 15) read past the block: none.
-    pub fn attributes(&self, x: u16, y: u16) -> TileAttributes {
-        self.attributes_at(i32::from(x), i32::from(y))
-    }
-
     pub fn attributes_at(&self, x: i32, y: i32) -> TileAttributes {
         let cell = self.cell(x, y);
         if cell & 0x8000 != 0 {
@@ -174,17 +170,28 @@ impl Map {
     /// Whether the frame of sprite `id` at `x`, `y` is clear on `dir` (the
     /// collision test for anything but the player).
     pub fn collide(&self, sprites: &Sprites, id: u16, frame: u16, x: i32, y: i32, dir: Dir) -> Hit {
-        match Self::sprite_body(sprites, id, frame, x, y) {
-            Some(body) => self.probe(body, dir, Mover::Thing).hit,
-            None => Hit::Free,
-        }
+        self.probe_body(sprites, id, frame, x, y, dir).hit
     }
 
     /// The downward check of a sprite frame at `x`, `y`, with the belt it
     /// finds; free for a missing frame.
     pub fn probe_sprite(&self, sprites: &Sprites, id: u16, frame: u16, x: i32, y: i32) -> Probe {
+        self.probe_body(sprites, id, frame, x, y, Dir::Down)
+    }
+
+    /// [`Map::probe`] for the box of a sprite frame at `x`, `y`; free for a
+    /// missing frame.
+    fn probe_body(
+        &self,
+        sprites: &Sprites,
+        id: u16,
+        frame: u16,
+        x: i32,
+        y: i32,
+        dir: Dir,
+    ) -> Probe {
         match Self::sprite_body(sprites, id, frame, x, y) {
-            Some(body) => self.probe(body, Dir::Down, Mover::Thing),
+            Some(body) => self.probe(body, dir, Mover::Thing),
             None => Probe::of(Hit::Free),
         }
     }

@@ -51,18 +51,6 @@ pub struct World {
 impl World {
     /// The level at its start, at `difficulty` (1 easy to 3 hard).
     pub fn new(level: &Level, tileset: &Tileset, sprites: &Sprites, difficulty: u8) -> Self {
-        Self::with_random(level, tileset, sprites, difficulty, Random::default())
-    }
-
-    /// [`World::new`] with another random generator (to compare with the
-    /// original, see [`Random::from_table`]).
-    pub fn with_random(
-        level: &Level,
-        tileset: &Tileset,
-        sprites: &Sprites,
-        difficulty: u8,
-        random: Random,
-    ) -> Self {
         let map = Map::new(level, tileset);
         // As in the original, a later start marker replaces an earlier one.
         let start = level
@@ -88,11 +76,14 @@ impl World {
             shots: Vec::new(),
             effects: Effects::default(),
             particles: Particles::default(),
-            state: LevelState::new(difficulty),
+            state: LevelState {
+                difficulty,
+                ..LevelState::default()
+            },
             camera: (0, 0),
             frame: 0,
             draw_page: true,
-            random,
+            random: Random::default(),
             draws: Vec::new(),
         };
         world
@@ -136,7 +127,7 @@ impl World {
         self.effects = Effects::default();
         self.shots.clear();
         self.particles = Particles::default();
-        self.random = self.random.restarted();
+        self.random = Random::default();
         self.draw_page = true;
         true
     }
