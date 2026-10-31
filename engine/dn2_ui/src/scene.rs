@@ -63,6 +63,10 @@ pub enum Step {
     Wait(u32),
     /// Waits for a key press, or until the ticks have passed.
     WaitKey(Option<u32>),
+    /// Where a key press skips to: once a scene has passed one, a key runs
+    /// the steps up to the next one (or the end) at once, without their
+    /// waits and sounds.
+    Skip,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +84,8 @@ pub struct Scene {
     pc: usize,
     wait: Wait,
     score: u32,
+    /// A [`Step::Skip`] has been passed: a key press skips.
+    skippable: bool,
 }
 
 impl Scene {
@@ -89,6 +95,7 @@ impl Scene {
             pc: 0,
             wait: Wait::None,
             score,
+            skippable: false,
         }
     }
 
@@ -105,18 +112,38 @@ impl Scene {
         }
     }
 
+    /// Runs the steps up to the next [`Step::Skip`] or the end at once,
+    /// leaving out the waits and sounds.
+    fn skip(&mut self, ctx: &mut Ctx) {
+        self.wait = Wait::None;
+        while let Some(step) = self.steps.get(self.pc) {
+            let at = self.pc;
+            self.pc += 1;
+            match step {
+                Step::Skip => break,
+                Step::Wait(_) | Step::WaitKey(_) | Step::Sound(_) => {}
+                _ => self.run_one_at(ctx, at, &mut false),
+            }
+        }
+    }
+
     /// Plays `ctx.ticks` ticks. Returns whether the scene has ended.
     pub fn step(&mut self, ctx: &mut Ctx) -> bool {
         let mut budget = ctx.ticks;
         // A key press ends one wait only.
         let mut pressed = !ctx.pressed.is_empty();
+        if pressed && self.skippable {
+            pressed = false;
+            self.skip(ctx);
+        }
         loop {
             match self.wait {
                 Wait::None => {
                     if self.pc >= self.steps.len() {
                         return true;
                     }
-                    self.run_one(ctx, &mut pressed);
+                    self.pc += 1;
+                    self.run_one_at(ctx, self.pc - 1, &mut pressed);
                 }
                 Wait::Ticks(left) => {
                     if left > budget {
@@ -168,9 +195,8 @@ impl Scene {
         }
     }
 
-    fn run_one(&mut self, ctx: &mut Ctx, pressed: &mut bool) {
-        let step = self.steps[self.pc].clone();
-        self.pc += 1;
+    fn run_one_at(&mut self, ctx: &mut Ctx, at: usize, pressed: &mut bool) {
+        let step = self.steps[at].clone();
         let data = ctx.data;
         let gfx = Gfx {
             status: &data.status,
@@ -221,6 +247,7 @@ impl Scene {
                 *pressed = false;
                 self.wait = Wait::Key(ticks.unwrap_or(u32::MAX));
             }
+            Step::Skip => self.skippable = true,
         }
     }
 }
@@ -279,6 +306,8 @@ fn tally(steps: &mut Vec<Step>, range: core::ops::Range<usize>, delay: u32) {
 /// secret bonuses worth 100000 points. The original's sound 1 is the big
 /// explosion, sound 0xd the jump.
 fn bonus_tally(steps: &mut Vec<Step>, n: u8) {
+    // A key skips to the next tally.
+    steps.push(Step::Skip);
     steps.push(Step::Wait(100));
     if n == 0 {
         tally(steps, 6..0x14, 5);
@@ -318,6 +347,8 @@ fn bonus_tally(steps: &mut Vec<Step>, n: u8) {
             row: TALLY_ROW,
             col: TALLY_COL,
         });
+        // A key during the countdown completes it.
+        steps.push(Step::Skip);
         steps.push(Step::Sound(Sound::BigExplosion));
         steps.push(Step::Wait(0x32));
     }
@@ -362,6 +393,9 @@ pub fn bonus_screen(score: u32, bonuses: &[u8], last_level: bool) -> Vec<Step> {
         right: 0x22,
     });
     steps.push(Step::FadeIn);
+    // From here on a key skips (see `bonus_tally`); after the last tally it
+    // ends the screen.
+    steps.push(Step::Skip);
     steps.push(Step::Wait(0x3c));
     for &n in bonuses {
         bonus_tally(&mut steps, n);
@@ -369,6 +403,7 @@ pub fn bonus_screen(score: u32, bonuses: &[u8], last_level: bool) -> Vec<Step> {
     if bonuses.is_empty() {
         bonus_tally(&mut steps, 0);
     }
+    steps.push(Step::Skip);
     steps.push(Step::Wait(0x1a9));
     if !last_level {
         steps.push(Step::Music(None));

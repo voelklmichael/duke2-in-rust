@@ -35,14 +35,23 @@ fn data() -> Option<GameData> {
     GameData::load(&Files::open(&folder).ok()?).ok()
 }
 
-/// Plays a scene to its end, pressing a key now and then; returns the final
-/// score and the events.
-fn run(data: &GameData, steps: Vec<Step>, score: u32) -> (u32, Vec<UiEvent>) {
+/// Plays a scene to its end, pressing a key every `every` steps; returns the
+/// final score and the events.
+fn run_keys(
+    data: &GameData,
+    steps: Vec<Step>,
+    score: u32,
+    every: u32,
+) -> Option<(u32, Vec<UiEvent>, u32)> {
     let mut screen = Screen::new(320, 200, Palette(Vec::new()));
     let mut events = Vec::new();
     let mut scene = Scene::new(steps, score);
     for i in 0..100_000u32 {
-        let pressed: &[Key] = if i % 100 == 99 { &[Key::Space] } else { &[] };
+        let pressed: &[Key] = if i % every == every - 1 {
+            &[Key::Space]
+        } else {
+            &[]
+        };
         let mut ctx = Ctx {
             screen: &mut screen,
             data,
@@ -52,10 +61,17 @@ fn run(data: &GameData, steps: Vec<Step>, score: u32) -> (u32, Vec<UiEvent>) {
             events: &mut events,
         };
         if scene.step(&mut ctx) {
-            return (scene.score(), events);
+            return Some((scene.score(), events, i + 1));
         }
     }
-    panic!("scene does not end");
+    None
+}
+
+/// Plays a scene to its end, pressing a key now and then; returns the final
+/// score and the events.
+fn run(data: &GameData, steps: Vec<Step>, score: u32) -> (u32, Vec<UiEvent>) {
+    let (score, events, _) = run_keys(data, steps, score, 100).expect("scene does not end");
+    (score, events)
 }
 
 #[test]
@@ -66,6 +82,21 @@ fn bonus_screen_adds_100000_a_bonus() {
         assert_eq!(score, 500 + 100_000 * bonuses.len() as u32);
         assert!(events.contains(&UiEvent::Music(None)));
     }
+}
+
+#[test]
+fn keys_skip_the_bonus_screen() {
+    let Some(data) = data() else { return };
+    let bonuses = [1, 2, 7];
+    let (_, _, slow) = run_keys(&data, bonus_screen(500, &bonuses, false), 500, u32::MAX).unwrap();
+    let (score, events, fast) =
+        run_keys(&data, bonus_screen(500, &bonuses, false), 500, 1).unwrap();
+    assert_eq!(score, 500 + 300_000);
+    assert!(events.contains(&UiEvent::Music(None)));
+    // The fades, then two keys a bonus (the countdown, the rest) and one for
+    // the wait at the end.
+    assert!(fast < 30, "{fast} steps");
+    assert!(slow > 500, "{slow} steps");
 }
 
 #[test]
